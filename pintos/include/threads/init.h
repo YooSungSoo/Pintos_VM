@@ -1,6 +1,8 @@
 #ifndef THREADS_INIT_H
 #define THREADS_INIT_H
 
+// test
+
 #include <debug.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -15,6 +17,6 @@ extern uint64_t *base_pml4;
 /* -q: Power off when kernel tasks complete? */
 extern bool power_off_when_done;
 
-void power_off (void) NO_RETURN;
+void power_off(void) NO_RETURN;
 
 #endif /* threads/init.h */
