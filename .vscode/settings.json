@@ -49,8 +49,8 @@
   /* 줄바꿈 설정 */
   "files.eol": "\n", // LF 사용
   /* C/C++ 특화 설정 */
-  "C_Cpp.clang_format_fallbackStyle": "Google", // 기본 스타일을 Google로 설정
-  "C_Cpp.clang_format_sortIncludes": true, // #include문 자동 정렬 활성화
+  "C_Cpp.clang_format_fallbackStyle": "{ BasedOnStyle: Google, IndentWidth: 2, TabWidth: 2, UseTab: Never, ColumnLimit: 0 }",
+  "C_Cpp.clang_format_sortIncludes": true,
   /* 기타 편의 설정 */
   "editor.minimap.enabled": false, // 미니맵 비활성화
   "editor.renderWhitespace": "boundary", // 공백 문자 시각화
