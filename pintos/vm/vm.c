@@ -44,6 +44,13 @@ static struct frame *vm_evict_frame(void);
 /* Create the pending page object with initializer. If you want to create a
  * page, do not create it directly and make it through this function or
  * `vm_alloc_page`. */
+
+// upage가 이미 사용 중인지 확인한다.
+// 페이지를 생성한다.
+// type에 따라 초기화 함수를 가져온다.
+//"uninit" 타입의 페이지로 초기화한다.
+// 필드 수정은 uninit_new를 호출한 이후에 해야 한다.
+// 생성한 페이지를 SPT에 추가한다.
 bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writable,
                                     vm_initializer *init, void *aux) {
   ASSERT(VM_TYPE(type) != VM_UNINIT)
@@ -52,11 +59,27 @@ bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writabl
 
   /* Check wheter the upage is already occupied or not. */
   if (spt_find_page(spt, upage) == NULL) {
-    /* TODO: Create the page, fetch the initialier according to the VM type,
-     * TODO: and then create "uninit" page struct by calling uninit_new. You
-     * TODO: should modify the field after calling the uninit_new. */
+    struct page *page = malloc(sizeof(struct page));
 
-    /* TODO: Insert the page into the spt. */
+    if (!page)
+      goto err;
+
+    typedef bool (*initializer_by_type)(struct page *, enum vm_type, void *);
+    initializer_by_type initializer = NULL;
+
+    switch (VM_TYPE(type)) {
+      case VM_ANON:
+        initializer = anon_initializer;
+        break;
+      case VM_FILE:
+        initializer = file_backed_initializer;
+        break;
+    }
+
+    uninit_new(page, upage, init, type, aux, initializer);
+    page->writable = writable;
+
+    return spt_insert_page(spt, page);
   }
 err:
   return false;
