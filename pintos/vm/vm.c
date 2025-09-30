@@ -59,136 +59,144 @@ err:
 }
 
 /* Find VA from spt and return page. On error, return NULL. */
+// supplementary page table에서 va에 해당하는 구조체 페이지를 찾아 반환
 struct page *
 spt_find_page(struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
-  struct page *page = NULL;
-  /* TODO: Fill this function. */
-
-  return page;
-}
-
-/* Insert PAGE into spt with validation. */
-bool spt_insert_page(struct supplemental_page_table *spt UNUSED,
-                     struct page *page UNUSED) {
-  int succ = false;
-  /* TODO: Fill this function. */
-
-  return succ;
-}
-
-void spt_remove_page(struct supplemental_page_table *spt, struct page *page) {
-  vm_dealloc_page(page);
-  return true;
-}
-
-/* Get the struct frame, that will be evicted. */
-static struct frame *
-vm_get_victim(void) {
-  struct frame *victim = NULL;
-  /* TODO: The policy for eviction is up to you. */
-
-  return victim;
-}
-
-/* Evict one page and return the corresponding frame.
- * Return NULL on error.*/
-static struct frame *
-vm_evict_frame(void) {
-  struct frame *victim UNUSED = vm_get_victim();
-  /* TODO: swap out the victim and return the evicted frame. */
-
-  return NULL;
-}
-
-/* palloc() and get frame. If there is no available page, evict the page
- * and return it. This always return valid address. That is, if the user pool
- * memory is full, this function evicts the frame to get the available memory
- * space.*/
-static struct frame *
-vm_get_frame(void) {
-  struct frame *frame = NULL;
-  /* TODO: Fill this function. */
-
-  ASSERT(frame != NULL);
-  ASSERT(frame->page == NULL);
-  return frame;
-}
-
-/* Growing the stack. */
-static void
-vm_stack_growth(void *addr UNUSED) {
-}
-
-/* Handle the fault on write_protected page */
-static bool
-vm_handle_wp(struct page *page UNUSED) {
-}
-
-/* Return true on success */
-bool vm_try_handle_fault(struct intr_frame *f UNUSED, void *addr UNUSED,
-                         bool user UNUSED, bool write UNUSED, bool not_present UNUSED) {
-  struct supplemental_page_table *spt UNUSED = &thread_current()->spt;
-  struct page *page = NULL;
-  /* TODO: Validate the fault */
-  /* TODO: Your code goes here */
-
-  return vm_do_claim_page(page);
-}
-
-/* Free the page.
- * DO NOT MODIFY THIS FUNCTION. */
-void vm_dealloc_page(struct page *page) {
-  destroy(page);
+  struct page *page = (struct page *)malloc(sizeof(struct page));
+  page->va = pg_round_down(va);
+  struct hash_elem *e = hash_find(&spt->spt_hash, &page->hash_elem);
   free(page);
-}
 
-/* Claim the page that allocate on VA. */
-bool vm_claim_page(void *va UNUSED) {
-  struct page *page = NULL;
-  /* TODO: Fill this function */
+  return e != NULL ? hash_entry(e, struct page, hash_elem) : NULL;
 
-  return vm_do_claim_page(page);
-}
+  /* Insert PAGE into spt with validation. */
+  bool spt_insert_page(struct supplemental_page_table * spt UNUSED,
+                       struct page * page UNUSED) {
+    int succ = false;
+    /* TODO: Fill this function. */
 
-/* Claim the PAGE and set up the mmu. */
-static bool
-vm_do_claim_page(struct page *page) {
-  struct frame *frame = vm_get_frame();
+    return succ;
+  }
 
-  /* Set links */
-  frame->page = page;
-  page->frame = frame;
+  void spt_remove_page(struct supplemental_page_table * spt, struct page * page) {
+    vm_dealloc_page(page);
+    return true;
+  }
 
-  /* TODO: Insert page table entry to map page's VA to frame's PA. */
+  /* Get the struct frame, that will be evicted. */
+  static struct frame *
+  vm_get_victim(void) {
+    struct frame *victim = NULL;
+    /* TODO: The policy for eviction is up to you. */
 
-  return swap_in(page, frame->kva);
-}
+    return victim;
+  }
 
-/* Initialize new supplemental page table */
-void supplemental_page_table_init(struct supplemental_page_table *spt UNUSED) {
-  hash_init(spt, page_hash, page_less, NULL);  // spt 초기화
-}
+  /* Evict one page and return the corresponding frame.
+   * Return NULL on error.*/
+  static struct frame *
+  vm_evict_frame(void) {
+    struct frame *victim UNUSED = vm_get_victim();
+    /* TODO: swap out the victim and return the evicted frame. */
 
-/* Copy supplemental page table from src to dst */
-bool supplemental_page_table_copy(struct supplemental_page_table *dst UNUSED,
-                                  struct supplemental_page_table *src UNUSED) {
-}
+    return NULL;
+  }
 
-/* Free the resource hold by the supplemental page table */
-void supplemental_page_table_kill(struct supplemental_page_table *spt UNUSED) {
-  /* TODO: Destroy all the supplemental_page_table hold by thread and
-   * TODO: writeback all the modified contents to the storage. */
-}
+  /* palloc() and get frame. If there is no available page, evict the page
+   * and return it. This always return valid address. That is, if the user pool
+   * memory is full, this function evicts the frame to get the available memory
+   * space.*/
+  static struct frame *
+  vm_get_frame(void) {
+    struct frame *frame = NULL;
+    /* TODO: Fill this function. */
 
-uint64_t
-page_hash(const struct hash_elem *e, void *aux) {
-  struct page *page = hash_entry(e, struct page, hash_elem);
-  return hash_bytes(page->va, sizeof *page->va);
-}
+    ASSERT(frame != NULL);
+    ASSERT(frame->page == NULL);
+    return frame;
+  }
 
-bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux) {
-  struct page *page_a = hash_entry(a, struct page, hash_elem);
-  struct page *page_b = hash_entry(b, struct page, hash_elem);
+  /* Growing the stack. */
+  static void
+  vm_stack_growth(void *addr UNUSED) {
+  }
 
-  return page_a->va < page_b->va;
-}
+  /* Handle the fault on write_protected page */
+  static bool
+  vm_handle_wp(struct page * page UNUSED) {
+  }
+
+  /* Return true on success */
+  bool vm_try_handle_fault(struct intr_frame * f UNUSED, void *addr UNUSED,
+                           bool user UNUSED, bool write UNUSED, bool not_present UNUSED) {
+    struct supplemental_page_table *spt UNUSED = &thread_current()->spt;
+    struct page *page = NULL;
+    /* TODO: Validate the fault */
+    /* TODO: Your code goes here */
+
+    return vm_do_claim_page(page);
+  }
+
+  /* Free the page.
+   * DO NOT MODIFY THIS FUNCTION. */
+  void vm_dealloc_page(struct page * page) {
+    destroy(page);
+    free(page);
+  }
+
+  /* Claim the page that allocate on VA. */
+  bool vm_claim_page(void *va UNUSED) {
+    struct page *page = NULL;
+    /* TODO: Fill this function */
+
+    return vm_do_claim_page(page);
+  }
+
+  /* Claim the PAGE and set up the mmu. */
+  static bool
+  vm_do_claim_page(struct page * page) {
+    struct frame *frame = vm_get_frame();
+
+    /* Set links */
+    frame->page = page;
+    page->frame = frame;
+
+    /* TODO: Insert page table entry to map page's VA to frame's PA. */
+
+    return swap_in(page, frame->kva);
+  }
+
+  /* Initialize new supplemental page table */
+  void supplemental_page_table_init(struct supplemental_page_table * spt UNUSED) {
+    hash_init(spt, page_hash, page_less, NULL);  // spt 초기화
+  }
+
+  /* Copy supplemental page table from src to dst */
+  bool supplemental_page_table_copy(struct supplemental_page_table * dst UNUSED,
+                                    struct supplemental_page_table * src UNUSED) {
+  }
+
+  /* Free the resource hold by the supplemental page table */
+  void supplemental_page_table_kill(struct supplemental_page_table * spt UNUSED) {
+    /* TODO: Destroy all the supplemental_page_table hold by thread and
+     * TODO: writeback all the modified contents to the storage. */
+  }
+
+  // spt에 넣을 인덱스를 해시 함수를 돌려서 도출
+  // hash table이 hash elem을 원소로 가지고 있으므로 페이지 자체에 대한 정보를 가져옴
+  // 인덱스를 리턴해야하므로 hash_bytes로 리턴
+  uint64_t
+  page_hash(const struct hash_elem *e, void *aux) {
+    struct page *page = hash_entry(e, struct page, hash_elem);
+    return hash_bytes(page->va, sizeof *page->va);
+  }
+
+  // 체이닝 방식의 spt를 구현하기 위한 함수
+  // 해시 테이블 버킷 내의 두 페이지의 주소값을 비교
+
+  bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux) {
+    struct page *page_a = hash_entry(a, struct page, hash_elem);
+    struct page *page_b = hash_entry(b, struct page, hash_elem);
+
+    return page_a->va < page_b->va;
+  }
