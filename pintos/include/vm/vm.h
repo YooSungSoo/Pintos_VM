@@ -60,6 +60,7 @@ struct page {
 #endif
   };
   struct hash_elem hash_elem;  // hash_elem 추가
+  bool writable                // bool 변수 추기
 };
 
 /* The representation of "frame" */

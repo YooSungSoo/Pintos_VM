@@ -3,6 +3,7 @@
 #include "vm/vm.h"
 
 #include "threads/malloc.h"
+#include "threads/mmu.h"
 #include "vm/inspect.h"
 
 static struct list frame_table;  // 구조체 추가
@@ -173,6 +174,10 @@ bool vm_claim_page(void *va UNUSED) {
 }
 
 /* Claim the PAGE and set up the mmu. */
+// vm_get_frame() 함수를 통해 프레임 하나를 얻음
+// 프레임의 페이지로 얻은 페이지를 연결
+// 프레임의 물리적 주소로 얻은 프레임을 연결
+// 현재 페이지 테이블에 가상 주소에 따른 frame을 매핑
 static bool
 vm_do_claim_page(struct page *page) {
   struct frame *frame = vm_get_frame();
@@ -181,7 +186,8 @@ vm_do_claim_page(struct page *page) {
   frame->page = page;
   page->frame = frame;
 
-  /* TODO: Insert page table entry to map page's VA to frame's PA. */
+  if (!pml4_set_page(thread_current()->pml4, page->va, frame->kva, page->writable))
+    return false;
 
   return swap_in(page, frame->kva);
 }
