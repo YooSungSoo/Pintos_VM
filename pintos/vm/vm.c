@@ -113,18 +113,15 @@ err:
 struct page *
 spt_find_page(struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
   /* 1. 비교용 임시 page 구조체 생성 */
-  struct page *page = (struct page *)malloc(sizeof(struct page));
+  struct page page;
 
   /* 2. va를 페이지 크기(PGSIZE) 단위로 내림 정렬 → 페이지 기준 주소 */
-  page->va = pg_round_down(va);
+  page.va = pg_round_down(va);
 
   /* 3. 해시 테이블에서 같은 va를 가진 page 탐색 */
-  struct hash_elem *e = hash_find(&spt->spt_hash, &page->hash_elem);
+  struct hash_elem *e = hash_find(&spt->spt_hash, &page.hash_elem);
 
-  /* 4. 임시로 만든 page는 필요 없으므로 해제 */
-  free(page);
-
-  /* 5. 찾았으면 struct page*로 변환해서 반환, 없으면 NULL */
+  /* 4. 찾았으면 struct page*로 변환해서 반환, 없으면 NULL */
   return e != NULL ? hash_entry(e, struct page, hash_elem) : NULL;
 }
 
@@ -152,8 +149,8 @@ bool spt_insert_page(struct supplemental_page_table *spt UNUSED,
  * - vm_dealloc_page()를 호출해 파괴(destroy) 및 free까지 진행.
  */
 void spt_remove_page(struct supplemental_page_table *spt, struct page *page) {
+  hash_delete(&spt->spt_hash, &page->hash_elem);
   vm_dealloc_page(page);
-  return true;  // ⚠️ 원형이 void인데 true 반환 → 수정 필요
 }
 
 /* Get the struct frame, that will be evicted. */

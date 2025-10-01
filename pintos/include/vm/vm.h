@@ -65,9 +65,9 @@ struct page {
 
 /* The representation of "frame" */
 struct frame {
-  void *kva;
-  struct page *page;
-  struct list_elem frame_elem;
+  void *kva;                    // 커널 가상 주소 (실제 물리 메모리를 가리킴)
+  struct page *page;            // 이 프레임을 사용하는 페이지
+  struct list_elem frame_elem;  // frame_table에 들어갈 때 사용
 };
 
 /* The function table for page operations.
