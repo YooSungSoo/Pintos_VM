@@ -1,8 +1,6 @@
 #ifndef THREADS_INIT_H
 #define THREADS_INIT_H
 
-// test
-
 #include <debug.h>
 #include <stdbool.h>
 #include <stddef.h>
