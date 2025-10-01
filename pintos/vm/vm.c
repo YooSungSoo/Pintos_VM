@@ -6,8 +6,8 @@
 #include "threads/mmu.h"
 #include "vm/inspect.h"
 
-static struct list frame_table; // 구조체 추가
-static bool is_valid_stack_access(void* addr, const uintptr_t rsp);
+static struct list frame_table;  // 구조체 추가
+static bool is_valid_stack_access(void *addr, const uintptr_t rsp);
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -20,7 +20,7 @@ void vm_init(void) {
   register_inspect_intr();
   /* DO NOT MODIFY UPPER LINES. */
   /* TODO: Your code goes here. */
-  list_init(&frame_table); // 구조체 초기화
+  list_init(&frame_table);  // 구조체 초기화
 }
 
 /* Get the type of the page. This function is useful if you want to know the
@@ -61,7 +61,7 @@ static struct frame *vm_evict_frame(void);
  */
 bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writable,
                                     vm_initializer *init, void *aux) {
-  ASSERT(VM_TYPE(type) != VM_UNINIT) // 타입이 UNINIT 자체로 들어오면 안 됨
+  ASSERT(VM_TYPE(type) != VM_UNINIT)  // 타입이 UNINIT 자체로 들어오면 안 됨
 
   struct supplemental_page_table *spt = &thread_current()->spt;
 
@@ -69,17 +69,17 @@ bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writabl
   if (spt_find_page(spt, upage) == NULL) {
     /* 2. 새로운 page 구조체 동적 할당 */
     struct page *page = malloc(sizeof(struct page));
-    if (!page) goto err; // 메모리 부족 → 실패 처리
+    if (!page) goto err;  // 메모리 부족 → 실패 처리
 
     /* 3. 타입에 따라 실제 초기화 함수 선택 */
     typedef bool (*initializer_by_type)(struct page *, enum vm_type, void *);
     initializer_by_type initializer = NULL;
 
     switch (VM_TYPE(type)) {
-      case VM_ANON: // 익명 페이지
+      case VM_ANON:  // 익명 페이지
         initializer = anon_initializer;
         break;
-      case VM_FILE: // 파일 매핑 페이지
+      case VM_FILE:  // 파일 매핑 페이지
         initializer = file_backed_initializer;
         break;
     }
@@ -97,7 +97,7 @@ bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writabl
   }
 
 err:
-  return false; // 이미 존재하거나 메모리 부족 → 실패
+  return false;  // 이미 존재하거나 메모리 부족 → 실패
 }
 
 /*
@@ -193,7 +193,8 @@ static struct frame *vm_get_frame(void) {
   /* 3. 물리 페이지를 얻지 못했을 경우 → 프레임이 가득 찼다는 뜻
    *    - 이때는 교체 정책(eviction policy)을 통해
    *      victim frame을 골라 swap out 한 뒤 프레임을 회수해야 한다. */
-  if (frame->kva == NULL) frame = vm_evict_frame();
+  if (frame->kva == NULL)
+    frame = vm_evict_frame();
   else
     /* 4. 정상적으로 프레임을 확보했다면
      *    frame_table (글로벌 프레임 리스트)에 추가한다.
@@ -220,9 +221,9 @@ static bool vm_handle_wp(struct page *page UNUSED) {
 }
 
 /* Return true on success */
-bool vm_try_handle_fault(struct intr_frame* f, void* addr, bool user, bool write, bool not_present) {
-  struct supplemental_page_table* spt = &thread_current()->spt;
-  struct page* page = NULL;
+bool vm_try_handle_fault(struct intr_frame *f, void *addr, bool user, bool write, bool not_present) {
+  struct supplemental_page_table *spt = &thread_current()->spt;
+  struct page *page = NULL;
   // ============================================
   // Step 1: 주소 정렬 및 기본 검증
   // ============================================
@@ -321,7 +322,7 @@ static bool vm_do_claim_page(struct page *page) {
 
 /* Initialize new supplemental page table */
 void supplemental_page_table_init(struct supplemental_page_table *spt UNUSED) {
-  hash_init(spt, page_hash, page_less, NULL); // spt 초기화
+  hash_init(spt, page_hash, page_less, NULL);  // spt 초기화
 }
 
 /* Copy supplemental page table from src to dst */
@@ -362,7 +363,7 @@ bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux U
   return page_a->va < page_b->va;
 }
 
-static bool is_valid_stack_access(void* addr, const uintptr_t rsp) {
+static bool is_valid_stack_access(void *addr, const uintptr_t rsp) {
   uintptr_t fault_addr = (uintptr_t)addr;
 
   // stack 영역 확인
