@@ -39,6 +39,11 @@ jobs:
           # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
             actions: read
+            
+          prompt: |
+            사용자의 요청을 수행하되, 반드시 한국어로 답변해주세요.
+            코드 리뷰, 설명, 제안 등 모든 응답은 한국어로 작성해야 합니다.
+            기술 용어는 영어 그대로 사용해도 되지만, 문장과 설명은 한국어로 작성하세요.
 
           # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
           # prompt: 'Update the pull request description to include a summary of changes.'
