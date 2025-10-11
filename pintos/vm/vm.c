@@ -328,6 +328,36 @@ void supplemental_page_table_init(struct supplemental_page_table *spt UNUSED) {
 /* Copy supplemental page table from src to dst */
 bool supplemental_page_table_copy(struct supplemental_page_table *dst UNUSED,
                                   struct supplemental_page_table *src UNUSED) {
+  struct hash_iterator i;
+  struct hash *src_hash = &src->spt_hash;
+  struct hash *dst_hash = &dst->spt_hash;
+
+  hash_first(&i, src_hash);
+  while (hash_next(&i)) {
+    struct page *src_page = hash_entry(hash_cur(&i), struct page, hash_elem);
+
+    enum vm_type type = page_get_type(&src_page);
+    if (type == VM_UNINIT) {
+      struct uninit_page *uninit_page = &src_page->uninit;
+      struct file_loader *file_loader = (struct file_loader *)uninit_page->aux;
+
+      // 새로운 file_loader(new_file_loader)할당, 기존의 file_loader 정보 복사
+      struct file_loader *new_file_loader = malloc(sizeof(struct file_loader));
+      memcpy(new_file_loader, uninit_page->aux, sizeof(struct file_loader));
+      new_file_loader->file = file_duplicate(file_loader->file);  // 파일 복제
+
+      // 초기화할 페이지에 new_file_loader를 이용해 초기화할 페이지 할당
+      vm_alloc_page_with_initializer(uninit_page->type, src_page->va, true,
+                                     uninit_page->init, new_file_loader);
+      vm_claim_page(src_page->va);                                    // 페이지를 소유하고 있는 스레드의 페이지 테이블(pml4)에 페이지 등록
+    } else {                                                          // 초기화된 페이징 경우
+      vm_alloc_page(src_page->operations->type, src_page->va, true);  // 페이지 할당
+      vm_claim_page(src_page->va);                                    // 페이지를 소유하고 있는 쓰레드의 페이지 테이블(pml4)에 페이지 등록
+      memcpy(src_page->va, src_page->frame->kva, PGSIZE);             // 페이지의 가상 주소에 초기화된 데이터 복사
+    }
+  }
+
+  return true;
 }
 
 /* Free the resource hold by the supplemental page table */
