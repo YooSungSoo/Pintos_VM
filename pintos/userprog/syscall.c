@@ -136,11 +136,20 @@ void syscall_handler(struct intr_frame* f UNUSED) {
       break;
     }
     case SYS_MMAP: {
-      mmap((void *)f->R.rdi, (size_t)f->R.rsi, (int)f->R.rdx, (int)f->R.rcx, (off_t)f->R.r8);
+      void *addr = (void *)f->R.rdi;
+      size_t length = (size_t)f->R.rsi;
+      int writable = (int)f->R.rdx;
+      int fd = (int)f->R.r10;
+      off_t offset = (off_t)f->R.r8;
+
+      // fd를 file 포인터로 변환 필요
+      struct file *file = NULL;
+
+      f->R.rax = (uintptr_t)do_mmap(addr, length, writable, file, offset);
       break;
     }
     case SYS_MUNMAP: {
-      munmap((void *)f->R.rdi);
+      do_munmap((void *)f->R.rdi);
       break;
     }
     default: {
