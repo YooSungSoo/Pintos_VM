@@ -1,5 +1,11 @@
 /* file.c: Implementation of memory backed file object (mmaped object). */
 
+#include "filesys/file.h"  // file_read_at, file_write_at
+
+#include "threads/synch.h"     // filesys_lock
+#include "threads/thread.h"    // thread_current(), pml4
+#include "threads/vaddr.h"     // PGSIZE
+#include "userprog/process.h"  // struct vm_load_arg
 #include "vm/vm.h"
 
 static bool file_backed_swap_in(struct page *page, void *kva);
