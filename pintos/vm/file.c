@@ -24,6 +24,13 @@ bool file_backed_initializer(struct page *page, enum vm_type type, void *kva) {
   page->operations = &file_ops;
 
   struct file_page *file_page = &page->file;
+
+  struct vm_load_arg *aux = (struct vm_load_arg *)page->uninit.aux;
+  file_page->file = aux->file;
+  file_page->offset = aux->ofs;
+  file_page->page_read_bytes = aux->read_bytes;
+
+  return true;
 }
 
 /* Swap in the page by read contents from the file. */
