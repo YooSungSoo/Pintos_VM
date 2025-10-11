@@ -823,13 +823,12 @@ static bool lazy_load_segment(struct page* page, void* aux) {
   uint32_t page_read_bytes = file_loader->page_read_bytes;
   uint32_t page_zero_bytes = file_loader->page_zero_bytes;
 
-  file_seek(file, ofs);  // 파일을 오프셋 위치로 이동
-  if (file_read(file, page->frame->kva, page_read_bytes) != (int)page_read_bytes) {
-    palloc_free_page(page->frame->kva);  // 페이지 할당 실패 시 할당된 자원 해제
+  if (file_read_at(file, page->frame->kva, page_read_bytes, ofs) != (int)page_read_bytes) {
+    free_frame(page->frame);
+    free(file_loader);
     return false;
   }
   memset(page->frame->kva + page_read_bytes, 0, page_zero_bytes);  // 읽어들인 바이트 이후의 메모리 0초기화
-  memcpy(page->va, page->frame->kva, PGSIZE);                      // 페이지의 가상 주소에 로드된 데이터 복사
 
   return true;
 }
@@ -869,9 +868,8 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage,
     file_loader->file = file;                        // 파일 포인터(file)
 
     /* TODO: Set up aux to pass information to the lazy_load_segment. */
-    void* aux = NULL;
     if (!vm_alloc_page_with_initializer(VM_ANON, upage, writable,
-                                        lazy_load_segment, aux))
+                                        lazy_load_segment, file_loader))
       return false;
 
     /* Advance. */

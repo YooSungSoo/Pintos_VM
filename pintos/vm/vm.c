@@ -322,12 +322,11 @@ static bool vm_do_claim_page(struct page *page) {
 
 /* Initialize new supplemental page table */
 void supplemental_page_table_init(struct supplemental_page_table *spt UNUSED) {
-  hash_init(spt, page_hash, page_less, NULL);  // spt 초기화
+  hash_init(&spt->spt_hash, page_hash, page_less, NULL);  // spt 초기화
 }
 
 /* Copy supplemental page table from src to dst */
-bool supplemental_page_table_copy(struct supplemental_page_table *dst UNUSED,
-                                  struct supplemental_page_table *src UNUSED) {
+bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct supplemental_page_table *src) {
   struct hash_iterator i;
   struct hash *src_hash = &src->spt_hash;
   struct hash *dst_hash = &dst->spt_hash;
@@ -336,23 +335,22 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst UNUSED,
   while (hash_next(&i)) {
     struct page *src_page = hash_entry(hash_cur(&i), struct page, hash_elem);
 
-    enum vm_type type = page_get_type(&src_page);
-    if (type == VM_UNINIT) {
+    enum vm_type type = src_page->operations->type;
+    if (type == VM_UNINIT) {  // 초기화되지 않은 페이지(VM_UNINIT)인 경우
       struct uninit_page *uninit_page = &src_page->uninit;
       struct file_loader *file_loader = (struct file_loader *)uninit_page->aux;
 
-      // 새로운 file_loader(new_file_loader)할당, 기존의 file_loader 정보 복사
+      // 새로운 파일 로더(new_file_loader)를 할당하고 기존의 파일 로더 정보를 복사
       struct file_loader *new_file_loader = malloc(sizeof(struct file_loader));
       memcpy(new_file_loader, uninit_page->aux, sizeof(struct file_loader));
-      new_file_loader->file = file_duplicate(file_loader->file);  // 파일 복제
+      new_file_loader->file = file_duplicate(file_loader->file);  // 파일을 복제하여 새로운 파일 포인터를 생성
 
-      // 초기화할 페이지에 new_file_loader를 이용해 초기화할 페이지 할당
-      vm_alloc_page_with_initializer(uninit_page->type, src_page->va, true,
-                                     uninit_page->init, new_file_loader);
+      // 초기화할 페이지에 신규 파일 로더를 이용하여 초기화할 페이지 할당
+      vm_alloc_page_with_initializer(uninit_page->type, src_page->va, true, uninit_page->init, new_file_loader);
       vm_claim_page(src_page->va);                                    // 페이지를 소유하고 있는 스레드의 페이지 테이블(pml4)에 페이지 등록
-    } else {                                                          // 초기화된 페이징 경우
+    } else {                                                          // 초기화된 페이지인 경우
       vm_alloc_page(src_page->operations->type, src_page->va, true);  // 페이지 할당
-      vm_claim_page(src_page->va);                                    // 페이지를 소유하고 있는 쓰레드의 페이지 테이블(pml4)에 페이지 등록
+      vm_claim_page(src_page->va);                                    // 페이지를 소유하고 있는 스레드의 페이지 테이블(pml4)에 페이지 등록
       memcpy(src_page->va, src_page->frame->kva, PGSIZE);             // 페이지의 가상 주소에 초기화된 데이터 복사
     }
   }
@@ -360,10 +358,20 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst UNUSED,
   return true;
 }
 
+// hash_clear 두 번째 인자로 입력될 콜백 함수
+void hash_action_destroy(struct hash_elem *hash_elem_, void *aux) {
+  struct page *page = hash_entry(hash_elem_, struct page, hash_elem);
+
+  if (page != NULL) {
+    vm_dealloc_page(page);
+  }
+}
+
 /* Free the resource hold by the supplemental page table */
 void supplemental_page_table_kill(struct supplemental_page_table *spt UNUSED) {
   /* TODO: Destroy all the supplemental_page_table hold by thread and
    * TODO: writeback all the modified contents to the storage. */
+  hash_clear(&spt->spt_hash, hash_action_destroy);
 }
 
 /*
@@ -376,7 +384,7 @@ void supplemental_page_table_kill(struct supplemental_page_table *spt UNUSED) {
  */
 uint64_t page_hash(const struct hash_elem *e, void *aux UNUSED) {
   struct page *page = hash_entry(e, struct page, hash_elem);
-  return hash_bytes(&page->va, sizeof page->va);
+  return hash_bytes(&page->va, sizeof(*page->va));
 }
 
 /*
@@ -404,4 +412,12 @@ static bool is_valid_stack_access(void *addr, const uintptr_t rsp) {
   if (USER_STACK - fault_addr > (1 << 20)) return false;
 
   return true;
+}
+
+// frame의 존재는 함수 호출자에서 확인
+void free_frame(struct frame *frame) {
+  list_remove(&frame->frame_elem);
+  pml4_clear_page(thread_current()->pml4, frame->page->va);
+  palloc_free_page(frame->kva);
+  free(frame);
 }
