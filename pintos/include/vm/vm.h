@@ -94,6 +94,15 @@ struct supplemental_page_table {
   struct hash spt_hash;  // 해시 구조체 추가
 };
 
+/* process.c load_segment의 vm_alloc_page_with_initializer의 네 번째 인자인
+ * lazy_load_segment 함수에 전달될 인자 aux구조체 */
+struct file_loader {
+  size_t page_read_bytes;
+  size_t page_zero_bytes;
+  off_t ofs;
+  struct file *file;
+};
+
 #include "threads/thread.h"
 void supplemental_page_table_init(struct supplemental_page_table *spt);
 bool supplemental_page_table_copy(struct supplemental_page_table *dst,

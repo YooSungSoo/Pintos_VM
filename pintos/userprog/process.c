@@ -340,7 +340,7 @@ int process_exec(void* f_name) {
   // 👇👇👇 사용자 모드 실행을 위한 인터럽트 프레임 설정
   struct intr_frame _if;
   _if.ds = _if.es = _if.ss = SEL_UDSEG;  // 사용자 데이터 세그먼트
-  _if.cs = SEL_UCSEG;  // 사용자 코드 세그먼트 : 사용자 모드로 설정
+  _if.cs = SEL_UCSEG;                    // 사용자 코드 세그먼트 : 사용자 모드로 설정
   _if.eflags = FLAG_IF | FLAG_MBS;
   // 👆👆👆
 
@@ -816,6 +816,22 @@ static bool lazy_load_segment(struct page* page, void* aux) {
   /* TODO: Load the segment from the file */
   /* TODO: This called when the first page fault occurs on address VA. */
   /* TODO: VA is available when calling this function. */
+  struct file_loader* file_loader = (struct file_loader*)aux;
+  struct file* file = file_loader->file;
+  off_t ofs = file_loader->ofs;
+  uint8_t* upage = page->va;
+  uint32_t page_read_bytes = file_loader->page_read_bytes;
+  uint32_t page_zero_bytes = file_loader->page_zero_bytes;
+
+  file_seek(file, ofs);  // 파일을 오프셋 위치로 이동
+  if (file_read(file, page->frame->kva, page_read_bytes) != (int)page_read_bytes) {
+    palloc_free_page(page->frame->kva);  // 페이지 할당 실패 시 할당된 자원 해제
+    return false;
+  }
+  memset(page->frame->kva + page_read_bytes, 0, page_zero_bytes);  // 읽어들인 바이트 이후의 메모리 0초기화
+  memcpy(page->va, page->frame->kva, PGSIZE);                      // 페이지의 가상 주소에 로드된 데이터 복사
+
+  return true;
 }
 
 /* Loads a segment starting at offset OFS in FILE at address
@@ -846,6 +862,12 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage,
     size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
     size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
+    struct file_loader* file_loader = malloc(sizeof(struct file_loader));
+    file_loader->page_read_bytes = page_read_bytes;  // 페이지에 실제로 읽어들일 바이트 수
+    file_loader->page_zero_bytes = page_zero_bytes;  // 페이지에 0으로 초기화 할 바이트 수
+    file_loader->ofs = ofs;                          // 파일 오프셋(ofs)
+    file_loader->file = file;                        // 파일 포인터(file)
+
     /* TODO: Set up aux to pass information to the lazy_load_segment. */
     void* aux = NULL;
     if (!vm_alloc_page_with_initializer(VM_ANON, upage, writable,
@@ -856,6 +878,7 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage,
     read_bytes -= page_read_bytes;
     zero_bytes -= page_zero_bytes;
     upage += PGSIZE;
+    ofs += page_read_bytes;  // 오프셋 갱신 추가
   }
   return true;
 }
