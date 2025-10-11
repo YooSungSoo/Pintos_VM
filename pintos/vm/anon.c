@@ -1,6 +1,7 @@
 /* anon.c: Implementation of page for non-disk image (a.k.a. anonymous page). */
 
 #include "devices/disk.h"
+#include "kernel/bitmap.h"
 #include "threads/vaddr.h"
 #include "vm/vm.h"
 
@@ -81,10 +82,39 @@ static bool anon_swap_in(struct page *page, void *kva) {
   return true;
 }
 
-/* Swap out the page by writing contents to the swap disk. */
-static bool
-anon_swap_out(struct page *page) {
+/* Swap out the page by writing contents to the swap disk.
+ANON 페이지를 스왑 아웃한다.
+디스크에 백업 파일이 없으므로, 디스크 상에 스왑 공간을 만들어 그곳에 페이지를
+저장한다.*/
+static bool anon_swap_out(struct page *page) {
   struct anon_page *anon_page = &page->anon;
+
+  /* bitmap table을 순회해 false값을 가진 비트(페이지 할당이 가능한 swap_slot)
+   * 검색 */
+  int page_no = bitmap_scan(swap_table, 0, 1, false);
+
+  if (page_no == BITMAP_ERROR) {
+    return false;
+  }
+
+  /* 한 페이지를 디스크에 써 주기 위해 SECTORS_PER_PAGE개의 섹터에 저장
+  이 때, 디스크에 각 섹터의 크기 DISK_SECTOR_SIZE만큼 써 줌 */
+  uint8_t *src = (uint8_t *)page->frame->kva;
+  for (int i = 0; i < SECTOR_PER_PAGE; ++i) {
+    disk_write(swap_disk, page_no * SECTOR_PER_PAGE + i,
+               src + DISK_SECTOR_SIZE * i);
+  }
+
+  /* swap_table의 해당 페이지에 대한 swap slot의 비트 true,
+    해당 페이지의 PTE에서 present bit 0으로 설정
+    이후 프로세스가 이 페이지에 접근하면 page fault가 뜸 */
+  bitmap_set(swap_table, page_no, true);
+  pml4_clear_page(thread_current()->pml4, page->va);
+
+  /* 페이지의 swap_index 값을 이 페이지가 저장된 swap slot으로 바꿔줌 */
+  anon_page->swap_index = page_no;
+
+  return true;
 }
 
 /* Destroy the anonymous page. PAGE will be freed by the caller. */
