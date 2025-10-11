@@ -888,10 +888,22 @@ static bool setup_stack(struct intr_frame* if_) {
   bool success = false;
   void* stack_bottom = (void*)(((uint8_t*)USER_STACK) - PGSIZE);
 
-  /* TODO: Map the stack on stack_bottom and claim the page immediately.
-   * TODO: If success, set the rsp accordingly.
-   * TODO: You should mark the page is stack. */
-  /* TODO: Your code goes here */
+  /* 페이지를 할당하여 스택의 최하단에 해당하는 메모리 영역을 확보
+  // 페이지 타입은 익명 페이지(VM_ANON)와 표시 페이지(VM_MARKER_0)를 OR 연산하여 사용
+  // 스택 페이지는 쓰기 가능(writable)한 속성을 갖도록 설정*/
+  if (!vm_alloc_page(VM_ANON | VM_MARKER_0, stack_bottom, true)) {
+    return false;
+  }
+
+  /* 페이지를 소유하고 있는 쓰레드의 페이지 테이블 (pml4)에 스택 페이지를 등록
+   * 스택 페이지를 주소 공간에 실제로 차지한 것으로 표시 */
+  if (!vm_claim_page(stack_bottom)) {
+    vm_dealloc_page(stack_bottom);
+    return false;
+  }
+
+  if_->rsp = USER_STACK;  // 스택 포인터를 USER_STACK으로 설정해 스택 시작
+  success = true;
 
   return success;
 }
