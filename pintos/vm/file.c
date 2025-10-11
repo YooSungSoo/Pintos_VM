@@ -53,6 +53,17 @@ file_backed_swap_in(struct page *page, void *kva) {
 static bool
 file_backed_swap_out(struct page *page) {
   struct file_page *file_page UNUSED = &page->file;
+
+  struct frame *frame = page->frame;
+
+  if (pml4_is_dirty(thread_current()->pml4, page->va)) {
+    file_write_at(file_page->file, page->frame->kva, file_page->page_read_bytes, file_page->offset);
+    pml4_set_dirty(thread_current()->pml4, page->va, false);
+  }
+  page->frame->page = NULL;
+  page->frame = NULL;
+  pml4_clear_page(thread_current()->pml4, page->va);
+  return true;
 }
 
 /* Destory the file backed page. PAGE will be freed by the caller. */
