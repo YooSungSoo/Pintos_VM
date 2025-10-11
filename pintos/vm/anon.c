@@ -57,9 +57,28 @@ bool anon_initializer(struct page *page, enum vm_type type, void *kva) {
 }
 
 /* Swap in the page by read contents from the swap disk. */
-static bool
-anon_swap_in(struct page *page, void *kva) {
+static bool anon_swap_in(struct page *page, void *kva) {
   struct anon_page *anon_page = &page->anon;
+
+  /* anon_page 구조체 안에 swap_out된 페이지가 저장된 디스크 스왑 영역 저장되어
+   * 있음 */
+  int page_no = anon_page->swap_index;
+
+  /* 해당 스왑 슬롯 사용 여부 검증 */
+  if (bitmap_test(swap_table, page_no) == false) {
+    return false;
+  }
+
+  /* 해당 스왑 영역의 데이터를 가상 주소 공간 kva에 write */
+  for (int i = 0; i < SECTOR_PER_PAGE; ++i) {
+    disk_read(swap_disk, page_no * SECTOR_PER_PAGE + i,
+              (uint8_t *)kva + DISK_SECTOR_SIZE * i);
+  }
+
+  /* 해당 swap slot = false */
+  bitmap_set(swap_table, page_no, false);
+  anon_page->swap_index = -1;
+  return true;
 }
 
 /* Swap out the page by writing contents to the swap disk. */
