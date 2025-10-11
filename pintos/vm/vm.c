@@ -7,6 +7,7 @@
 #include "vm/inspect.h"
 
 static struct list frame_table;  // 구조체 추가
+static bool is_valid_stack_access(void *addr, const uintptr_t rsp);
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -25,8 +26,7 @@ void vm_init(void) {
 /* Get the type of the page. This function is useful if you want to know the
  * type of the page after it will be initialized.
  * This function is fully implemented now. */
-enum vm_type
-page_get_type(struct page *page) {
+enum vm_type page_get_type(struct page *page) {
   int ty = VM_TYPE(page->operations->type);
   switch (ty) {
     case VM_UNINIT:
@@ -69,8 +69,7 @@ bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writabl
   if (spt_find_page(spt, upage) == NULL) {
     /* 2. 새로운 page 구조체 동적 할당 */
     struct page *page = malloc(sizeof(struct page));
-    if (!page)
-      goto err;  // 메모리 부족 → 실패 처리
+    if (!page) goto err;  // 메모리 부족 → 실패 처리
 
     /* 3. 타입에 따라 실제 초기화 함수 선택 */
     typedef bool (*initializer_by_type)(struct page *, enum vm_type, void *);
@@ -110,8 +109,7 @@ err:
  *   같은 va를 가진 hash_elem을 찾는다.
  * - 찾으면 해당 struct page를 반환, 없으면 NULL 반환.
  */
-struct page *
-spt_find_page(struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
+struct page *spt_find_page(struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
   /* 1. 비교용 임시 page 구조체 생성 */
   struct page page;
 
@@ -154,8 +152,7 @@ void spt_remove_page(struct supplemental_page_table *spt, struct page *page) {
 }
 
 /* Get the struct frame, that will be evicted. */
-static struct frame *
-vm_get_victim(void) {
+static struct frame *vm_get_victim(void) {
   struct frame *victim = NULL;
   /* TODO: The policy for eviction is up to you. */
 
@@ -164,8 +161,7 @@ vm_get_victim(void) {
 
 /* Evict one page and return the corresponding frame.
  * Return NULL on error.*/
-static struct frame *
-vm_evict_frame(void) {
+static struct frame *vm_evict_frame(void) {
   struct frame *victim UNUSED = vm_get_victim();
   /* TODO: swap out the victim and return the evicted frame. */
 
@@ -180,8 +176,7 @@ vm_evict_frame(void) {
  *   프레임을 확보한다.
  * - 최종적으로 유효한 프레임을 반환한다.
  */
-static struct frame *
-vm_get_frame(void) {
+static struct frame *vm_get_frame(void) {
   struct frame *frame = NULL;
 
   /* 1. 프레임 구조체 자체를 동적 할당한다.
@@ -218,24 +213,53 @@ vm_get_frame(void) {
 }
 
 /* Growing the stack. */
-static void
-vm_stack_growth(void *addr UNUSED) {
+static void vm_stack_growth(void *addr UNUSED) {
 }
 
 /* Handle the fault on write_protected page */
-static bool
-vm_handle_wp(struct page *page UNUSED) {
+static bool vm_handle_wp(struct page *page UNUSED) {
 }
 
 /* Return true on success */
-bool vm_try_handle_fault(struct intr_frame *f UNUSED, void *addr UNUSED,
-                         bool user UNUSED, bool write UNUSED, bool not_present UNUSED) {
-  struct supplemental_page_table *spt UNUSED = &thread_current()->spt;
+bool vm_try_handle_fault(struct intr_frame *f, void *addr, bool user, bool write, bool not_present) {
+  struct supplemental_page_table *spt = &thread_current()->spt;
   struct page *page = NULL;
-  /* TODO: Validate the fault */
-  /* TODO: Your code goes here */
+  // ============================================
+  // Step 1: 주소 정렬 및 기본 검증
+  // ============================================
 
-  return vm_do_claim_page(page);
+  // 1: addr을 페이지 단위로 정렬
+  // 페이지 시작 주소로 정렬
+  void *page_addr = pg_round_down(addr);
+
+  // 2: User 영역인지 확인 : 보안
+  if (!is_user_vaddr(page_addr)) {
+    return false;
+  }
+
+  // ============================================
+  // Step 2: SPT에서 페이지 찾기
+  // ============================================
+
+  page = spt_find_page(spt, page_addr);
+
+  if (page != NULL) {
+    return vm_do_claim_page(page);
+  }
+
+  // ============================================
+  // Step 3: Stack Growth 확인
+  // ============================================
+  // rsp 근처인지, stack 영역인지, 1MB 제한을 넘었는지 (1 << 20 = 1MB)
+  if (is_valid_stack_access(page_addr, f->rsp)) {
+    vm_stack_growth(page_addr);
+    return true;
+  }
+
+  // ============================================
+  // Step 4: Invalid Access 처리
+  // ============================================
+  return false;
 }
 
 /* Free the page.
@@ -259,8 +283,7 @@ bool vm_claim_page(void *va UNUSED) {
    * 만약 존재하지 않으면 (즉, 아직 관리되지 않는 주소라면) 실패 처리. */
   page = spt_find_page(&thread_current()->spt, va);
 
-  if (page == NULL)
-    return false;
+  if (page == NULL) return false;
 
   /* 페이지를 실제 물리 프레임에 할당하고 매핑하는 작업 진행 */
   return vm_do_claim_page(page);
@@ -288,8 +311,7 @@ static bool vm_do_claim_page(struct page *page) {
    *      가상주소와 물리주소를 매핑한다.
    *    - writable 플래그에 따라 쓰기 가능 여부를 설정한다.
    *    - 실패하면 false 반환. */
-  if (!pml4_set_page(thread_current()->pml4, page->va, frame->kva, page->writable))
-    return false;
+  if (!pml4_set_page(thread_current()->pml4, page->va, frame->kva, page->writable)) return false;
 
   /* 4. 페이지 타입에 맞게 실제 데이터를 메모리에 적재 (swap_in 호출)
    *    - 예: Lazy load의 경우 파일에서 읽어오기
@@ -322,8 +344,7 @@ void supplemental_page_table_kill(struct supplemental_page_table *spt UNUSED) {
  * - hash_bytes(): 주어진 메모리 블록을 바이트 단위로 해싱하는 Pintos 유틸 함수.
  * - 결국 동일한 가상 주소를 가진 page 는 동일한 해시 값으로 매핑됨.
  */
-uint64_t
-page_hash(const struct hash_elem *e, void *aux UNUSED) {
+uint64_t page_hash(const struct hash_elem *e, void *aux UNUSED) {
   struct page *page = hash_entry(e, struct page, hash_elem);
   return hash_bytes(&page->va, sizeof page->va);
 }
@@ -340,4 +361,17 @@ bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux U
   struct page *page_b = hash_entry(b, struct page, hash_elem);
 
   return page_a->va < page_b->va;
+}
+
+static bool is_valid_stack_access(void *addr, const uintptr_t rsp) {
+  uintptr_t fault_addr = (uintptr_t)addr;
+
+  // stack 영역 확인
+  if (fault_addr >= USER_STACK) return false;
+  // rsp 근처 확인
+  if (fault_addr < rsp - 32) return false;
+  // 1MB 제한 확인
+  if (USER_STACK - fault_addr > (1 << 20)) return false;
+
+  return true;
 }
