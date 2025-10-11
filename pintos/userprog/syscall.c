@@ -1,3 +1,4 @@
+#include "syscall.h"
 #include "userprog/syscall.h"
 
 #include <stdio.h>
@@ -45,6 +46,8 @@ int exec(const char* cmd_line);
 pid_t fork(const char* thread_name, struct intr_frame* if_);
 int wait(pid_t pid);
 int dup2(int oldfd, int newfd);
+void *mmap (void *addr, size_t length, int writable, int fd, off_t offset);
+void munmap (void *addr);
 
 #define MSR_STAR 0xc0000081         /* Segment selector msr */
 #define MSR_LSTAR 0xc0000082        /* Long mode SYSCALL target */
@@ -130,6 +133,14 @@ void syscall_handler(struct intr_frame* f UNUSED) {
       int oldfd = (int)f->R.rdi;
       int newfd = (int)f->R.rsi;
       f->R.rax = dup2(oldfd, newfd);
+      break;
+    }
+    case SYS_MMAP: {
+      mmap((void *)f->R.rdi, (size_t)f->R.rsi, (int)f->R.rdx, (int)f->R.rcx, (off_t)f->R.r8);
+      break;
+    }
+    case SYS_MUNMAP: {
+      munmap((void *)f->R.rdi);
       break;
     }
     default: {
@@ -514,4 +525,12 @@ int dup2(int oldfd, int newfd) {
   }
 
   return newfd;
+}
+
+void *mmap (void *addr, size_t length, int writable, int fd, off_t offset) {
+  return NULL;
+}
+
+void munmap (void *addr) {
+  return;
 }
