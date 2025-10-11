@@ -31,10 +31,10 @@ bool file_backed_initializer(struct page *page, enum vm_type type, void *kva) {
 
   struct file_page *file_page = &page->file;
 
-  struct vm_load_arg *aux = (struct vm_load_arg *)page->uninit.aux;
+  struct file_page *aux = (struct file_page *)page->uninit.aux;
   file_page->file = aux->file;
-  file_page->offset = aux->ofs;
-  file_page->page_read_bytes = aux->read_bytes;
+  file_page->offset = aux->offset;
+  file_page->page_read_bytes = aux->page_read_bytes;
 
   return true;
 }
