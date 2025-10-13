@@ -8,6 +8,13 @@ struct anon_page {
   uint8_t swap_index;
 };
 
+struct swap_anon {
+  bool use;  // 스왑 공간을 사용하고 있는지 여부
+  disk_sector_t sector[8];
+  struct page *page;
+  struct list_elem swap_elem;
+};
+
 void vm_anon_init(void);
 bool anon_initializer(struct page *page, enum vm_type type, void *kva);
 

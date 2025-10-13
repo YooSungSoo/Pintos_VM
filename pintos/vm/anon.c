@@ -31,12 +31,23 @@ struct bitmap *swap_table;
   SECTOR_PER_PAGE == 8 */
 const size_t SECTOR_PER_PAGE = PGSIZE / DISK_SECTOR_SIZE;
 
+struct list swap_list;
+
 /* Initialize the data for anonymous pages */
 void vm_anon_init(void) {
   /* TODO: Set up the swap_disk. */
+  list_init(&swap_list);
   swap_disk = disk_get(1, 1);
-  size_t swap_size = disk_size(swap_disk) / SECTOR_PER_PAGE;
-  swap_table = bitmap_create(swap_size);
+  disk_sector_t max_sector_size = disk_size(swap_disk);
+  for (int i = 0; i < max_sector_size; i += 8) {
+    struct swap_anon *swap_anon = malloc(sizeof(struct swap_anon));
+    swap_anon->page = NULL;
+    swap_anon->use = false;
+    for (int j = 0; j < 8; j++) {
+      swap_anon->sector[j] = i + j;
+    }
+    list_push_back(&swap_list, &swap_anon->swap_elem);
+  }
 }
 
 /* Initialize the file mapping */
