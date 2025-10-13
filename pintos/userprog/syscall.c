@@ -164,7 +164,7 @@ void syscall_handler(struct intr_frame* f UNUSED) {
         break;
       }
 
-      f->R.rax = (uintptr_t)do_mmap(addr, length, writable, file, offset);
+      f->R.rax = (uintptr_t)do_mmap(addr, length, writable, reopened_file, offset);
       break;
     }
     case SYS_MUNMAP: {
