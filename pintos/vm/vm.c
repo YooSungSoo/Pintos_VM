@@ -7,6 +7,9 @@
 #include "vm/inspect.h"
 
 static struct list frame_table;  // 구조체 추가
+struct lock frame_lock;
+struct list_elem *next = NULL;
+static bool is_valid_stack_access(void *addr, const uintptr_t rsp);
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -20,6 +23,7 @@ void vm_init(void) {
   /* DO NOT MODIFY UPPER LINES. */
   /* TODO: Your code goes here. */
   list_init(&frame_table);  // 구조체 초기화
+  lock_init(&frame_lock);
 }
 
 /* Get the type of the page. This function is useful if you want to know the
@@ -153,7 +157,18 @@ void spt_remove_page(struct supplemental_page_table *spt, struct page *page) {
 /* Get the struct frame, that will be evicted. */
 static struct frame *vm_get_victim(void) {
   struct frame *victim = NULL;
-  /* TODO: The policy for eviction is up to you. */
+
+  lock_acquire(&frame_lock);
+  for (next = list_begin(&frame_table); next != list_end(&frame_table); next = list_next(next)) {
+    victim = list_entry(next, struct frame, frame_elem);
+    if (pml4_is_accessed(thread_current()->pml4, victim->page->va))
+      pml4_set_accessed(thread_current()->pml4, victim->page->va, false);
+    else {
+      lock_release(&frame_lock);
+      return victim;
+    }
+  }
+  lock_release(&frame_lock);
 
   return victim;
 }
@@ -161,8 +176,10 @@ static struct frame *vm_get_victim(void) {
 /* Evict one page and return the corresponding frame.
  * Return NULL on error.*/
 static struct frame *vm_evict_frame(void) {
-  struct frame *victim UNUSED = vm_get_victim();
-  /* TODO: swap out the victim and return the evicted frame. */
+  struct frame *victim = vm_get_victim();
+  if (victim->page)
+    swap_out(victim->page);
+  return victim;
 
   return NULL;
 }
@@ -212,11 +229,41 @@ static struct frame *vm_get_frame(void) {
 }
 
 /* Growing the stack. */
-void vm_stack_growth(void *addr) {
+static void vm_stack_growth(void *addr UNUSED) {
+  void *page_addr = pg_round_down(addr);
+
+  // 페이지가 있는 경우, 아무 것도 안함
+  if (spt_find_page(&thread_current()->spt, page_addr) != NULL) return;
+
+  // 페이지가 없는 경우, 새로운 페이지 익명페이지로 할당
+  if (!vm_alloc_page_with_initializer(VM_ANON, page_addr, true, NULL, NULL)) {
+    PANIC("vm_stack_growth: alloc failed");
+  }
+
+  // 페이지 클레임
+  if (!vm_claim_page(page_addr)) {
+    PANIC("vm_stack_growth: claim failed");
+  }
 }
 
 /* Handle the fault on write_protected page */
 static bool vm_handle_wp(struct page *page UNUSED) {
+  if (!page->accessible)
+    return false;
+
+  void *kva = page->frame->kva;
+
+  page->frame->kva = palloc_get_page(PAL_USER | PAL_ZERO);
+
+  if (page->frame->kva == NULL)
+    page->frame = vm_evict_frame();
+
+  memcpy(page->frame->kva, kva, PGSIZE);
+
+  if (!pml4_set_page(thread_current()->pml4, page->va, page->frame->kva, page->accessible))
+    return false;
+
+  return true;
 }
 
 /* Return true on success */
@@ -243,8 +290,8 @@ bool vm_try_handle_fault(struct intr_frame *f, void *addr, bool user, bool write
   }
 
   // rsp 근처인지, stack 영역인지, 1MB 제한을 넘었는지 (1 << 20 = 1MB)
-  if (is_valid_stack_access(page_addr, f->rsp)) {
-    vm_stack_growth(page_addr);
+  if (is_valid_stack_access(addr, f->rsp)) {
+    vm_stack_growth(addr);
     return true;
   }
 
@@ -260,6 +307,7 @@ void vm_dealloc_page(struct page *page) {
 
 /*
  * vm_claim_page()
+
  *
  * - 주어진 가상 주소 va 에 해당하는 페이지를 SPT에서 찾아서
  *   실제 물리 프레임을 할당(Claim)하고 매핑까지 완료하는 함수.
@@ -335,12 +383,12 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct su
       new_file_loader->file = file_duplicate(file_loader->file);  // 파일을 복제하여 새로운 파일 포인터를 생성
 
       // 초기화할 페이지에 신규 파일 로더를 이용하여 초기화할 페이지 할당
-      vm_alloc_page_with_initializer(uninit_page->type, src_page->va, true, uninit_page->init, new_file_loader);
-      vm_claim_page(src_page->va);                                    // 페이지를 소유하고 있는 스레드의 페이지 테이블(pml4)에 페이지 등록
-    } else {                                                          // 초기화된 페이지인 경우
-      vm_alloc_page(src_page->operations->type, src_page->va, true);  // 페이지 할당
-      vm_claim_page(src_page->va);                                    // 페이지를 소유하고 있는 스레드의 페이지 테이블(pml4)에 페이지 등록
-      memcpy(src_page->va, src_page->frame->kva, PGSIZE);             // 페이지의 가상 주소에 초기화된 데이터 복사
+      vm_alloc_page_with_initializer(uninit_page->type, src_page->va, src_page->writable, uninit_page->init, new_file_loader);
+      vm_claim_page(src_page->va);                                                  // 페이지를 소유하고 있는 스레드의 페이지 테이블(pml4)에 페이지 등록
+    } else {                                                                        // 초기화된 페이지인 경우
+      vm_alloc_page(src_page->operations->type, src_page->va, src_page->writable);  // 페이지 할당
+      vm_claim_page(src_page->va);                                                  // 페이지를 소유하고 있는 스레드의 페이지 테이블(pml4)에 페이지 등록
+      memcpy(src_page->va, src_page->frame->kva, PGSIZE);                           // 페이지의 가상 주소에 초기화된 데이터 복사
     }
   }
 
@@ -373,7 +421,7 @@ void supplemental_page_table_kill(struct supplemental_page_table *spt UNUSED) {
  */
 uint64_t page_hash(const struct hash_elem *e, void *aux UNUSED) {
   struct page *page = hash_entry(e, struct page, hash_elem);
-  return hash_bytes(&page->va, sizeof(*page->va));
+  return hash_bytes(&page->va, sizeof(page->va));
 }
 
 /*

@@ -93,7 +93,7 @@ static bool lazy_load_mmap(struct page *page, void *aux) {
 
   // 파일에서 데이터 읽기
   off_t bytes_read = file_read_at(file_info->file, page->frame->kva,
-                                   file_info->page_read_bytes, file_info->offset);
+                                  file_info->page_read_bytes, file_info->offset);
 
   if (bytes_read < 0) {
     return false;
@@ -136,34 +136,29 @@ void *do_mmap(void *addr, off_t length, int writable,
               struct file *file, off_t offset) {
   struct thread *curr = thread_current();
 
-  // 파일이 존재하지 않으면
-  if (length <= 0 || file == NULL) {
+  if (length == 0 || file == NULL) {
     return NULL;
   }
-  if (pg_ofs(addr) != 0) return NULL;  // 페이지 정렬 확인
 
   off_t file_len = file_length(file);
   if (file_len == 0) {
     return NULL;
   }
 
-  // 🔥 2. 커널 주소 영역 검증 추가!
-  // 시작 주소가 커널 영역이면 실패
-  if (is_kernel_vaddr(addr)) return NULL;
-
-  // 끝 주소가 커널 영역을 침범하면 실패
-  void *end_addr = addr + length;
-  if (is_kernel_vaddr(end_addr)) return NULL;
-
-  // 오버플로우 체크 (end_addr < addr이면 오버플로우 발생)
-  if (end_addr < addr) return NULL;
-
   if (offset % PGSIZE != 0) {
+    return NULL;
+  }
+
+  if (addr == NULL) {
     return NULL;
   }
 
   if (pg_ofs(addr) != 0) {
     return NULL;  // page-aligned가 아님
+  }
+
+  if (!is_user_vaddr(addr)) {
+    return NULL;
   }
 
   // 주소 범위 체크
@@ -236,6 +231,8 @@ rollback:
   free(region);
   return NULL;
 }
+static void *find_free_address(struct thread *t, size_t length) {
+  size_t page_count = (length + PGSIZE - 1) / PGSIZE;
 
 /* Do the munmap */
 void do_munmap(void *addr) {
@@ -253,7 +250,52 @@ void do_munmap(void *addr) {
       region = r;
       break;
     }
-       }
+  }
+
+  if (region == NULL) {
+    return;  // 해당 주소에 매핑이 없음
+  }
+
+  // 2. 모든 페이지를 해제
+  for (size_t i = 0; i < region->page_count; i++) {
+    void *page_addr = addr + (i * PGSIZE);
+    struct page *page = spt_find_page(&curr->spt, page_addr);
+
+    if (page != NULL) {
+      // destroy 호출 (file_backed_destroy가 dirty 체크 & write back 수행)
+      destroy(page);
+      // SPT에서 제거
+      spt_remove_page(&curr->spt, page);
+    }
+  }
+
+  // 3. 파일 닫기 (조건부)
+  if (file_should_close(region->file)) {
+    file_close(region->file);
+  }
+
+  // 4. region을 리스트에서 제거 및 메모리 해제
+  list_remove(&region->elem);
+  free(region);
+}
+
+/* Do the munmap */
+void do_munmap(void *addr) {
+  struct thread *curr = thread_current();
+
+  // 1. mmap_list에서 해당 addr의 region 찾기
+  struct mmap_region *region = NULL;
+  struct list_elem *e;
+
+  for (e = list_begin(&curr->mmap_list);
+       e != list_end(&curr->mmap_list);
+       e = list_next(e)) {
+    struct mmap_region *r = list_entry(e, struct mmap_region, elem);
+    if (r->start_addr == addr) {
+      region = r;
+      break;
+    }
+  }
 
   if (region == NULL) {
     return;  // 해당 주소에 매핑이 없음
