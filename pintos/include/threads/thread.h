@@ -128,6 +128,7 @@ struct thread {
 #ifdef VM
   /* Table for whole virtual memory owned by thread. */
   struct supplemental_page_table spt;
+  struct list mmap_list;
 #endif
 
   /* Owned by thread.c. */
@@ -139,6 +140,13 @@ struct thread {
   unsigned magic; /* Detects stack overflow. */
 };
 // 👆👆👆 TCB(Thread Control Block)
+
+struct mmap_region {
+  void *start_addr;        // 매핑 시작 주소
+  size_t page_count;       // 매핑된 페이지 개수
+  struct file *file;       // 매핑된 파일 (munmap 시 file_close용)
+  struct list_elem elem;   // mmap_list의 원소
+};
 
 extern struct list sleep_list;  // sleep 상태인 스레드들을 담는 리스트
 
