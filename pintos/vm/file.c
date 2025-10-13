@@ -90,6 +90,8 @@ void *
 do_mmap(void *addr, size_t length, int writable,
         struct file *file, off_t offset) {
 }
+static void *find_free_address(struct thread *t, size_t length) {
+  size_t page_count = (length + PGSIZE - 1) / PGSIZE;
 
 /* Do the munmap */
 void do_munmap(void *addr) {
