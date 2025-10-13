@@ -258,8 +258,8 @@ bool vm_try_handle_fault(struct intr_frame *f, void *addr, bool user, bool write
   }
 
   // rsp 근처인지, stack 영역인지, 1MB 제한을 넘었는지 (1 << 20 = 1MB)
-  if (is_valid_stack_access(page_addr, f->rsp)) {
-    vm_stack_growth(page_addr);
+  if (is_valid_stack_access(addr, f->rsp)) {
+    vm_stack_growth(addr);
     return true;
   }
 

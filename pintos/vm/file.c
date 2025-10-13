@@ -93,7 +93,7 @@ static bool lazy_load_mmap(struct page *page, void *aux) {
 
   // 파일에서 데이터 읽기
   off_t bytes_read = file_read_at(file_info->file, page->frame->kva,
-                                   file_info->page_read_bytes, file_info->offset);
+                                  file_info->page_read_bytes, file_info->offset);
 
   if (bytes_read < 0) {
     return false;
@@ -253,7 +253,7 @@ void do_munmap(void *addr) {
       region = r;
       break;
     }
-       }
+  }
 
   if (region == NULL) {
     return;  // 해당 주소에 매핑이 없음
