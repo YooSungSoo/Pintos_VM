@@ -295,7 +295,7 @@ void do_munmap(void *addr) {
       region = r;
       break;
     }
-       }
+  }
 
   if (region == NULL) {
     return;  // 해당 주소에 매핑이 없음
