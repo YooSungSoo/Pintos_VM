@@ -456,6 +456,15 @@ void process_exit(void) {
     curr->running_file = NULL;
   }
 #endif
+
+#ifdef VM
+  // 모든 mmap 영역 해제
+  while (!list_empty(&curr->mmap_list)) {
+    struct list_elem *e = list_begin(&curr->mmap_list);
+    struct mmap_region *region = list_entry(e, struct mmap_region, elem);
+    do_munmap(region->start_addr);
+  }
+#endif
   sema_up(&curr->wait_sema);
 
   sema_down(&curr->exit_sema);

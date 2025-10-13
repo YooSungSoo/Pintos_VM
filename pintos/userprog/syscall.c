@@ -45,6 +45,8 @@ int exec(const char* cmd_line);
 pid_t fork(const char* thread_name, struct intr_frame* if_);
 int wait(pid_t pid);
 int dup2(int oldfd, int newfd);
+void *mmap (void *addr, size_t length, int writable, int fd, off_t offset);
+void munmap (void *addr);
 
 #define MSR_STAR 0xc0000081         /* Segment selector msr */
 #define MSR_LSTAR 0xc0000082        /* Long mode SYSCALL target */
@@ -130,6 +132,43 @@ void syscall_handler(struct intr_frame* f UNUSED) {
       int oldfd = (int)f->R.rdi;
       int newfd = (int)f->R.rsi;
       f->R.rax = dup2(oldfd, newfd);
+      break;
+    }
+    case SYS_MMAP: {
+      void *addr = (void *)f->R.rdi;
+      off_t length = (off_t)f->R.rsi;
+      int writable = (int)f->R.rdx;
+      int fd = (int)f->R.r10;
+      off_t offset = (off_t)f->R.r8;
+
+      // 1. fd 유효성 검사
+      if (fd < 2 || fd >= FDT_SIZE) {
+        f->R.rax = 0;  // MAP_FAILED
+        break;
+      }
+
+      // 2. 현재 스레드의 fdt에서 file 가져오기
+      struct thread *curr = thread_current();
+      struct file *file = curr->fdt[fd];
+
+      // 3. file 유효성 검사
+      if (file == NULL || file == STDIN_MARKER || file == STDOUT_MARKER) {
+        f->R.rax = 0;  // MAP_FAILED
+        break;
+      }
+
+      // 4. file_reopen으로 독립적인 파일 참조 생성
+      struct file *reopened_file = file_reopen(file);
+      if (reopened_file == NULL) {
+        f->R.rax = 0;  // MAP_FAILED
+        break;
+      }
+
+      f->R.rax = (uintptr_t)do_mmap(addr, length, writable, reopened_file, offset);
+      break;
+    }
+    case SYS_MUNMAP: {
+      do_munmap((void *)f->R.rdi);
       break;
     }
     default: {
