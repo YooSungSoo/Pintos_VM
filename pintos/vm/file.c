@@ -2,6 +2,7 @@
 
 #include "filesys/file.h"  // file_read_at, file_write_at
 
+#include "threads/malloc.h"
 #include "threads/synch.h"     // filesys_lock
 #include "threads/thread.h"    // thread_current(), pml4
 #include "threads/vaddr.h"     // PGSIZE
@@ -86,11 +87,146 @@ file_backed_destroy(struct page *page) {
 }
 
 /* Do the mmap */
-void *
-do_mmap(void *addr, size_t length, int writable,
-        struct file *file, off_t offset) {
+void *do_mmap(void *addr, off_t length, int writable,
+              struct file *file, off_t offset) {
+  // 1. 기본 검증
+  if (addr == NULL || pg_ofs(addr) != 0) {
+    return NULL;  // page-aligned가 아님
+  }
+
+  if (length == 0) {
+    return NULL;
+  }
+
+  if (file == NULL) {
+    return NULL;
+  }
+
+  // 2. 파일 길이 확인
+  off_t file_len = file_length(file);
+  if (file_len == 0) {
+    return NULL;
+  }
+
+  // 3. 매핑할 페이지 수 계산
+  size_t page_count = (length + PGSIZE - 1) / PGSIZE;
+
+  // 4. 기존 매핑과 겹치는지 확인
+  struct thread *curr = thread_current();
+  for (size_t i = 0; i < page_count; i++) {
+    void *check_addr = addr + (i * PGSIZE);
+    if (spt_find_page(&curr->spt, check_addr) != NULL) {
+      return NULL;  // 이미 매핑된 페이지가 있음
+    }
+  }
+
+  // 5. mmap_region 생성 및 리스트에 추가
+  struct mmap_region *region = malloc(sizeof(struct mmap_region));
+  if (region == NULL) {
+    return NULL;
+  }
+
+  region->start_addr = addr;
+  region->page_count = page_count;
+  region->file = file;  // file_reopen으로 받은 파일
+  list_push_back(&curr->mmap_list, &region->elem);
+
+  // 6. 각 페이지를 lazy하게 할당
+  off_t current_offset = offset;
+  off_t remaining = length;
+
+  for (size_t i = 0; i < page_count; i++) {
+    void *page_addr = addr + (i * PGSIZE);
+
+    // 이 페이지에서 읽을 바이트 수 계산
+    off_t read_bytes = remaining > PGSIZE ? PGSIZE : remaining;
+    off_t zero_bytes = PGSIZE - read_bytes;
+
+    // aux 구조체 생성 (file_backed_initializer에 전달)
+    struct file_loader *aux = malloc(sizeof(struct file_loader));
+    if (aux == NULL) {
+      goto rollback;
+    }
+
+    aux->file = file;
+    aux->ofs = current_offset;
+    aux->page_read_bytes = read_bytes;
+    aux->page_zero_bytes = zero_bytes;
+
+    // VM_FILE 타입으로 페이지 할당 (lazy)
+    if (!vm_alloc_page_with_initializer(VM_FILE, page_addr, writable,
+                                        NULL, aux)) {
+      free(aux);
+      goto rollback;
+                                        }
+
+    current_offset += read_bytes;
+    remaining -= read_bytes;
+  }
+
+  // ReSharper disable once CppDFAMemoryLeak
+  return addr;
+
+rollback:
+  // 실패 시 이미 할당된 페이지들 정리
+  for (size_t j = 0; j < page_count; j++) {
+    void *page_addr = addr + (j * PGSIZE);
+    struct page *page = spt_find_page(&curr->spt, page_addr);
+    if (page != NULL) {
+      spt_remove_page(&curr->spt, page);
+      free(page->uninit.aux);  // aux 메모리 해제
+      free(page);
+    }
+  }
+
+  // region 정리
+  list_remove(&region->elem);
+  free(region);
+
+  return NULL;
 }
 
 /* Do the munmap */
 void do_munmap(void *addr) {
+  struct thread *curr = thread_current();
+
+  // 1. mmap_list에서 해당 addr의 region 찾기
+  struct mmap_region *region = NULL;
+  struct list_elem *e;
+
+  for (e = list_begin(&curr->mmap_list);
+       e != list_end(&curr->mmap_list);
+       e = list_next(e)) {
+    struct mmap_region *r = list_entry(e, struct mmap_region, elem);
+    if (r->start_addr == addr) {
+      region = r;
+      break;
+    }
+       }
+
+  if (region == NULL) {
+    return;  // 해당 주소에 매핑이 없음
+  }
+
+  // 2. 모든 페이지를 해제
+  for (size_t i = 0; i < region->page_count; i++) {
+    void *page_addr = addr + (i * PGSIZE);
+    struct page *page = spt_find_page(&curr->spt, page_addr);
+
+    if (page != NULL) {
+      // destroy 호출 (file_backed_destroy가 dirty 체크 & write back 수행)
+      destroy(page);
+      // SPT에서 제거
+      spt_remove_page(&curr->spt, page);
+      // page 메모리 해제
+      free(page);
+    }
+  }
+
+  // 3. 파일 닫기
+  file_close(region->file);
+
+  // 4. region을 리스트에서 제거 및 메모리 해제
+  list_remove(&region->elem);
+  free(region);
 }

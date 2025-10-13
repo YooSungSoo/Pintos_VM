@@ -1,4 +1,3 @@
-#include "syscall.h"
 #include "userprog/syscall.h"
 
 #include <stdio.h>
@@ -137,13 +136,33 @@ void syscall_handler(struct intr_frame* f UNUSED) {
     }
     case SYS_MMAP: {
       void *addr = (void *)f->R.rdi;
-      size_t length = (size_t)f->R.rsi;
+      off_t length = (off_t)f->R.rsi;
       int writable = (int)f->R.rdx;
       int fd = (int)f->R.r10;
       off_t offset = (off_t)f->R.r8;
 
-      // fd를 file 포인터로 변환 필요
-      struct file *file = NULL;
+      // 1. fd 유효성 검사
+      if (fd < 2 || fd >= FDT_SIZE) {
+        f->R.rax = 0;  // MAP_FAILED
+        break;
+      }
+
+      // 2. 현재 스레드의 fdt에서 file 가져오기
+      struct thread *curr = thread_current();
+      struct file *file = curr->fdt[fd];
+
+      // 3. file 유효성 검사
+      if (file == NULL || file == STDIN_MARKER || file == STDOUT_MARKER) {
+        f->R.rax = 0;  // MAP_FAILED
+        break;
+      }
+
+      // 4. file_reopen으로 독립적인 파일 참조 생성
+      struct file *reopened_file = file_reopen(file);
+      if (reopened_file == NULL) {
+        f->R.rax = 0;  // MAP_FAILED
+        break;
+      }
 
       f->R.rax = (uintptr_t)do_mmap(addr, length, writable, file, offset);
       break;
@@ -534,12 +553,4 @@ int dup2(int oldfd, int newfd) {
   }
 
   return newfd;
-}
-
-void *mmap (void *addr, size_t length, int writable, int fd, off_t offset) {
-  return NULL;
-}
-
-void munmap (void *addr) {
-  return;
 }
