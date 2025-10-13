@@ -1,11 +1,20 @@
 #ifndef VM_ANON_H
 #define VM_ANON_H
+#include "devices/disk.h"
 #include "vm/vm.h"
+
 struct page;
 enum vm_type;
 
 struct anon_page {
-  uint8_t swap_index;
+  struct swap_anon *swap_anon;
+};
+
+struct swap_anon {
+  bool use;  // 스왑 공간을 사용하고 있는지 여부
+  disk_sector_t sector[8];
+  struct page *page;
+  struct list_elem swap_elem;
 };
 
 void vm_anon_init(void);
