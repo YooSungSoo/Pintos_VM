@@ -136,7 +136,6 @@ void *do_mmap(void *addr, off_t length, int writable,
               struct file *file, off_t offset) {
   struct thread *curr = thread_current();
 
-  // 1. 파일 및 length 검증
   if (length == 0 || file == NULL) {
     return NULL;
   }
@@ -146,34 +145,29 @@ void *do_mmap(void *addr, off_t length, int writable,
     return NULL;
   }
 
-  // 2. offset 검증 (page-aligned여야 함)
   if (offset % PGSIZE != 0) {
     return NULL;
   }
 
-  // 3. addr 검증 및 할당
   if (addr == NULL) {
-    // ✅ 커널이 적절한 주소 찾기
-    addr = find_free_address(curr, length);
-    if (addr == NULL) {
-      return NULL;
-    }
-  } else {
-    // 사용자가 지정한 주소 검증
-    if (pg_ofs(addr) != 0) {
-      return NULL;  // page-aligned가 아님
-    }
-
-    // 커널 주소 거부
-    if (!is_user_vaddr(addr) || !is_user_vaddr(addr + length - 1)) {
-      return NULL;
-    }
+    return NULL;
   }
 
-  // 4. 매핑할 페이지 수 계산
+  if (pg_ofs(addr) != 0) {
+    return NULL;  // page-aligned가 아님
+  }
+
+  if (!is_user_vaddr(addr)) {
+    return NULL;
+  }
+
+  // 주소 범위 체크
+  if (!is_user_vaddr(addr + length - 1)) {
+    return NULL;
+  }
+  // 5. 매핑할 페이지 수 계산
   size_t page_count = (length + PGSIZE - 1) / PGSIZE;
 
-  // 5. 기존 매핑과 겹치는지 확인
   for (size_t i = 0; i < page_count; i++) {
     void *check_addr = addr + (i * PGSIZE);
     if (spt_find_page(&curr->spt, check_addr) != NULL) {
