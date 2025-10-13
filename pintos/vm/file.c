@@ -231,6 +231,8 @@ rollback:
   free(region);
   return NULL;
 }
+static void *find_free_address(struct thread *t, size_t length) {
+  size_t page_count = (length + PGSIZE - 1) / PGSIZE;
 
 /* Do the munmap */
 void do_munmap(void *addr) {
@@ -249,6 +251,51 @@ void do_munmap(void *addr) {
       break;
     }
   }
+
+  if (region == NULL) {
+    return;  // 해당 주소에 매핑이 없음
+  }
+
+  // 2. 모든 페이지를 해제
+  for (size_t i = 0; i < region->page_count; i++) {
+    void *page_addr = addr + (i * PGSIZE);
+    struct page *page = spt_find_page(&curr->spt, page_addr);
+
+    if (page != NULL) {
+      // destroy 호출 (file_backed_destroy가 dirty 체크 & write back 수행)
+      destroy(page);
+      // SPT에서 제거
+      spt_remove_page(&curr->spt, page);
+    }
+  }
+
+  // 3. 파일 닫기 (조건부)
+  if (file_should_close(region->file)) {
+    file_close(region->file);
+  }
+
+  // 4. region을 리스트에서 제거 및 메모리 해제
+  list_remove(&region->elem);
+  free(region);
+}
+
+/* Do the munmap */
+void do_munmap(void *addr) {
+  struct thread *curr = thread_current();
+
+  // 1. mmap_list에서 해당 addr의 region 찾기
+  struct mmap_region *region = NULL;
+  struct list_elem *e;
+
+  for (e = list_begin(&curr->mmap_list);
+       e != list_end(&curr->mmap_list);
+       e = list_next(e)) {
+    struct mmap_region *r = list_entry(e, struct mmap_region, elem);
+    if (r->start_addr == addr) {
+      region = r;
+      break;
+    }
+       }
 
   if (region == NULL) {
     return;  // 해당 주소에 매핑이 없음

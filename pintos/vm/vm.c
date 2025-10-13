@@ -256,11 +256,11 @@ static bool vm_handle_wp(struct page *page UNUSED) {
 bool vm_try_handle_fault(struct intr_frame *f, void *addr, bool user, bool write, bool not_present) {
   struct supplemental_page_table *spt = &thread_current()->spt;
   struct page *page = NULL;
-  // ============================================
-  // Step 1: 주소 정렬 및 기본 검증
-  // ============================================
 
-  // 1: addr을 페이지 단위로 정렬
+  if (!not_present) {
+    return false;  // exception.c에서 프로세스 종료
+  }
+
   // 페이지 시작 주소로 정렬
   void *page_addr = pg_round_down(addr);
 
@@ -269,28 +269,18 @@ bool vm_try_handle_fault(struct intr_frame *f, void *addr, bool user, bool write
     return false;
   }
 
-  // ============================================
-  // Step 2: SPT에서 페이지 찾기
-  // ============================================
-
   page = spt_find_page(spt, page_addr);
 
   if (page != NULL) {
     return vm_do_claim_page(page);
   }
 
-  // ============================================
-  // Step 3: Stack Growth 확인
-  // ============================================
   // rsp 근처인지, stack 영역인지, 1MB 제한을 넘었는지 (1 << 20 = 1MB)
   if (is_valid_stack_access(page_addr, f->rsp)) {
     vm_stack_growth(page_addr);
     return true;
   }
 
-  // ============================================
-  // Step 4: Invalid Access 처리
-  // ============================================
   return false;
 }
 
