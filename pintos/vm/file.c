@@ -136,29 +136,34 @@ void *do_mmap(void *addr, off_t length, int writable,
               struct file *file, off_t offset) {
   struct thread *curr = thread_current();
 
-  if (length == 0 || file == NULL) {
+  // 파일이 존재하지 않으면
+  if (length <= 0 || file == NULL) {
     return NULL;
   }
+  if (pg_ofs(addr) != 0) return NULL;  // 페이지 정렬 확인
 
   off_t file_len = file_length(file);
   if (file_len == 0) {
     return NULL;
   }
 
-  if (offset % PGSIZE != 0) {
-    return NULL;
-  }
+  // 🔥 2. 커널 주소 영역 검증 추가!
+  // 시작 주소가 커널 영역이면 실패
+  if (is_kernel_vaddr(addr)) return NULL;
 
-  if (addr == NULL) {
+  // 끝 주소가 커널 영역을 침범하면 실패
+  void *end_addr = addr + length;
+  if (is_kernel_vaddr(end_addr)) return NULL;
+
+  // 오버플로우 체크 (end_addr < addr이면 오버플로우 발생)
+  if (end_addr < addr) return NULL;
+
+  if (offset % PGSIZE != 0) {
     return NULL;
   }
 
   if (pg_ofs(addr) != 0) {
     return NULL;  // page-aligned가 아님
-  }
-
-  if (!is_user_vaddr(addr)) {
-    return NULL;
   }
 
   // 주소 범위 체크
