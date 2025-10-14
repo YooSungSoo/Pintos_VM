@@ -573,16 +573,26 @@ void *check_and_get_page(const void *uaddr) {
     return kva;
   }
 
-  // 4. 매핑 안 되어 있으면 stack growth 가능 여부 확인
+  // SPT에서 페이지 찾기
   void* page_addr = pg_round_down(uaddr);
+  struct page* page = spt_find_page(&curr->spt, page_addr);
 
-  if (is_valid_stack_access(page_addr, (uintptr_t)curr->user_rsp)) {
-    // Stack growth 수행
-    vm_stack_growth(page_addr);
-
-    // 다시 매핑 확인
-    kva = pml4_get_page(curr->pml4, uaddr);
+  if (page != NULL) {
+    // SPT에 있음 -> Lazy loading 필요
+    if (vm_claim_page(page_addr)) {
+      kva = pml4_get_page(curr->pml4, uaddr);
+      return kva;
+    }
+    // Claim 실패
+    return NULL;
   }
 
-  return kva;  // 성공하면 kva, 실패하면 NULL
+  // SPT에서 못찾으면 stack growth 시도
+  if (is_valid_stack_access(page_addr, (uintptr_t)curr->user_rsp)) {
+    vm_stack_growth(page_addr);
+    kva = pml4_get_page(curr->pml4, uaddr);
+    return kva;
+  }
+
+  return NULL; // 모두 실패
 }
