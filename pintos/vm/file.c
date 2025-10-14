@@ -7,6 +7,7 @@
 #include "threads/thread.h"    // thread_current(), pml4
 #include "threads/vaddr.h"     // PGSIZE
 #include "userprog/process.h"  // struct vm_load_arg
+#include "userprog/syscall.h"
 #include "vm/vm.h"
 
 static bool file_backed_swap_in(struct page *page, void *kva);
@@ -44,8 +45,9 @@ bool file_backed_initializer(struct page *page, enum vm_type type, void *kva) {
 static bool
 file_backed_swap_in(struct page *page, void *kva) {
   struct file_page *file_page UNUSED = &page->file;
-
+  lock_acquire(&filesys_lock);
   int read = file_read_at(file_page->file, page->frame->kva, file_page->page_read_bytes, file_page->offset);
+  lock_release(&filesys_lock);
   memset(page->frame->kva + read, 0, PGSIZE - read);
   return true;
 }
@@ -54,16 +56,20 @@ file_backed_swap_in(struct page *page, void *kva) {
 static bool
 file_backed_swap_out(struct page *page) {
   struct file_page *file_page UNUSED = &page->file;
+  struct thread *owner = page->owner;
+  uint64_t *pml4 = owner ? owner->pml4 : thread_current()->pml4;
 
   struct frame *frame = page->frame;
 
-  if (pml4_is_dirty(thread_current()->pml4, page->va)) {
+  if (pml4_is_dirty(pml4, page->va)) {
+    lock_acquire(&filesys_lock);
     file_write_at(file_page->file, page->frame->kva, file_page->page_read_bytes, file_page->offset);
-    pml4_set_dirty(thread_current()->pml4, page->va, false);
+    lock_release(&filesys_lock);
+    pml4_set_dirty(pml4, page->va, false);
   }
   page->frame->page = NULL;
   page->frame = NULL;
-  pml4_clear_page(thread_current()->pml4, page->va);
+  pml4_clear_page(pml4, page->va);
   return true;
 }
 
@@ -71,19 +77,24 @@ file_backed_swap_out(struct page *page) {
 static void
 file_backed_destroy(struct page *page) {
   struct file_page *file_page UNUSED = &page->file;
+  struct thread *owner = page->owner;
+  uint64_t pml4 = owner ? owner->pml4 : thread_current()->pml4;
 
-  if (pml4_is_dirty(thread_current()->pml4, page->va)) {
+  if (pml4_is_dirty(pml4, page->va) && page->frame) {
+    lock_acquire(&filesys_lock);
     file_write_at(file_page->file, page->va, file_page->page_read_bytes, file_page->offset);
-    pml4_set_dirty(thread_current()->pml4, page->va, false);
+    lock_release(&filesys_lock);
+    pml4_set_dirty(pml4, page->va, false);
   }
 
   if (page->frame) {
     list_remove(&page->frame->frame_elem);
     page->frame->page = NULL;
+    palloc_free_page(page->frame->kva);
+    free(page->frame);
     page->frame = NULL;
   }
-
-  pml4_clear_page(thread_current()->pml4, page->va);
+  pml4_clear_page(pml4, page->va);
 }
 
 /* Do the mmap */
@@ -92,8 +103,10 @@ static bool lazy_load_mmap(struct page *page, void *aux) {
   struct file_page *file_info = (struct file_page *)aux;
 
   // 파일에서 데이터 읽기
+  lock_acquire(&filesys_lock);
   off_t bytes_read = file_read_at(file_info->file, page->frame->kva,
                                   file_info->page_read_bytes, file_info->offset);
+  lock_release(&filesys_lock);
 
   if (bytes_read < 0) {
     return false;
@@ -136,40 +149,29 @@ void *do_mmap(void *addr, off_t length, int writable,
               struct file *file, off_t offset) {
   struct thread *curr = thread_current();
 
-  // 파일이 존재하지 않으면
-  if (length <= 0 || file == NULL) {
+  /* 기본 매개변수 검증 */
+  if (file == NULL || length <= 0 || length > (off_t)0x10000000 ||  // 256MB 제한
+      addr == NULL || offset % PGSIZE != 0) {
     return NULL;
   }
-  if (pg_ofs(addr) != 0) return NULL;  // 페이지 정렬 확인
+
+  /* 파일 검증 */
+  if (file_length(file) == 0) {
+    return NULL;
+  }
+
+  /* 주소 정렬 및 유효성 검증 */
+  if (pg_ofs(addr) != 0 || !is_user_vaddr(addr)) {
+    return NULL;
+  }
+
+  /* 매핑 범위 검증 (오버플로우 및 커널 영역 침범 체크) */
+  if ((uintptr_t)addr + length < (uintptr_t)addr ||  // 오버플로우
+      !is_user_vaddr(addr + length - 1)) {           // 끝 주소가 커널 영역
+    return NULL;
+  }
 
   off_t file_len = file_length(file);
-  if (file_len == 0) {
-    return NULL;
-  }
-
-  // 🔥 2. 커널 주소 영역 검증 추가!
-  // 시작 주소가 커널 영역이면 실패
-  if (is_kernel_vaddr(addr)) return NULL;
-
-  // 끝 주소가 커널 영역을 침범하면 실패
-  void *end_addr = addr + length;
-  if (is_kernel_vaddr(end_addr)) return NULL;
-
-  // 오버플로우 체크 (end_addr < addr이면 오버플로우 발생)
-  if (end_addr < addr) return NULL;
-
-  if (offset % PGSIZE != 0) {
-    return NULL;
-  }
-
-  if (pg_ofs(addr) != 0) {
-    return NULL;  // page-aligned가 아님
-  }
-
-  // 주소 범위 체크
-  if (!is_user_vaddr(addr + length - 1)) {
-    return NULL;
-  }
   // 5. 매핑할 페이지 수 계산
   size_t page_count = (length + PGSIZE - 1) / PGSIZE;
 
@@ -226,11 +228,7 @@ rollback:
   for (size_t j = 0; j < page_count; j++) {
     void *page_addr = addr + (j * PGSIZE);
     struct page *page = spt_find_page(&curr->spt, page_addr);
-    if (page != NULL) {
-      spt_remove_page(&curr->spt, page);
-      free(page->uninit.aux);
-      free(page);
-    }
+    if (page != NULL) spt_remove_page(&curr->spt, page);
   }
   list_remove(&region->elem);
   free(region);
@@ -265,8 +263,6 @@ void do_munmap(void *addr) {
     struct page *page = spt_find_page(&curr->spt, page_addr);
 
     if (page != NULL) {
-      // destroy 호출 (file_backed_destroy가 dirty 체크 & write back 수행)
-      destroy(page);
       // SPT에서 제거
       spt_remove_page(&curr->spt, page);
     }

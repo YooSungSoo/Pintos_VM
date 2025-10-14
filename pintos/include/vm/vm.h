@@ -61,6 +61,8 @@ struct page {
   };
   struct hash_elem hash_elem;  // hash_elem 추가
   bool writable;               // bool 변수 추기
+  bool accessible;
+  struct thread *owner;  // 이 페이지를 매핑한 사용자 프로세스
 };
 
 /* The representation of "frame" */
@@ -68,6 +70,7 @@ struct frame {
   void *kva;                    // 커널 가상 주소 (실제 물리 메모리를 가리킴)
   struct page *page;            // 이 프레임을 사용하는 페이지
   struct list_elem frame_elem;  // frame_table에 들어갈 때 사용
+  bool pinned;
 };
 
 /* The function table for page operations.
@@ -128,4 +131,6 @@ enum vm_type page_get_type(struct page *page);
 uint64_t page_hash(const struct hash_elem *e, void *aux);  // 선언
 bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux);
 void hash_action_destroy(struct hash_elem *hash_elem_, void *aux);
+bool is_valid_stack_access(void *addr, uintptr_t rsp);
+void vm_stack_growth(void *addr);
 #endif /* VM_VM_H */

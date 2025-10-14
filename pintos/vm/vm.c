@@ -7,7 +7,8 @@
 #include "vm/inspect.h"
 
 static struct list frame_table;  // 구조체 추가
-static bool is_valid_stack_access(void *addr, const uintptr_t rsp);
+struct lock frame_lock;
+struct list_elem *next = NULL;
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -21,6 +22,7 @@ void vm_init(void) {
   /* DO NOT MODIFY UPPER LINES. */
   /* TODO: Your code goes here. */
   list_init(&frame_table);  // 구조체 초기화
+  lock_init(&frame_lock);
 }
 
 /* Get the type of the page. This function is useful if you want to know the
@@ -153,19 +155,49 @@ void spt_remove_page(struct supplemental_page_table *spt, struct page *page) {
 
 /* Get the struct frame, that will be evicted. */
 static struct frame *vm_get_victim(void) {
-  struct frame *victim = NULL;
-  /* TODO: The policy for eviction is up to you. */
+  lock_acquire(&frame_lock);
+  if (list_empty(&frame_table)) {
+    lock_release(&frame_lock);
+    return NULL;
+  }
 
-  return victim;
+  if (next == NULL || next == list_end(&frame_table)) next = list_begin(&frame_table);
+
+  size_t scanned = 0, total = list_size(&frame_table) * 2;
+  while (scanned++ < total) {
+    struct frame *f = list_entry(next, struct frame, frame_elem);
+
+    next = list_next(next);
+    if (next == list_end(&frame_table)) next = list_begin(&frame_table);
+
+    if (f == NULL || f->page == NULL || f->pinned) continue;
+
+    struct page *p = f->page;
+    struct thread *owner = p->owner;
+    uint64_t *pml4 = owner ? owner->pml4 : thread_current()->pml4;
+    if (pml4_is_accessed(pml4, p->va)) {
+      pml4_set_accessed(pml4, p->va, false);  // 2차 기회 부여
+      continue;
+    }
+    // accessed == 0 victim
+    lock_release(&frame_lock);
+    return f;
+  }
+  lock_release(&frame_lock);
+  return NULL;
 }
 
 /* Evict one page and return the corresponding frame.
  * Return NULL on error.*/
 static struct frame *vm_evict_frame(void) {
-  struct frame *victim UNUSED = vm_get_victim();
-  /* TODO: swap out the victim and return the evicted frame. */
+  struct frame *victim = vm_get_victim();
+  if (victim == NULL) return NULL;
 
-  return NULL;
+  if (victim->page) {
+    if (!swap_out(victim->page)) return NULL;
+  }
+  // victim 프레임은 frame_table에 그대로 남겨 재사용
+  return victim;
 }
 
 /*
@@ -193,17 +225,22 @@ static struct frame *vm_get_frame(void) {
   /* 3. 물리 페이지를 얻지 못했을 경우 → 프레임이 가득 찼다는 뜻
    *    - 이때는 교체 정책(eviction policy)을 통해
    *      victim frame을 골라 swap out 한 뒤 프레임을 회수해야 한다. */
-  if (frame->kva == NULL)
+  if (frame->kva == NULL) {
+    free(frame);  // 누수 방지를 위해 free
     frame = vm_evict_frame();
-  else
+    if (frame == NULL) return NULL;
+  } else {
     /* 4. 정상적으로 프레임을 확보했다면
      *    frame_table (글로벌 프레임 리스트)에 추가한다.
      *    - 이 리스트는 교체 알고리즘에서 victim 선택할 때 사용됨 */
+    lock_acquire(&frame_lock);
     list_push_back(&frame_table, &frame->frame_elem);
-
+    lock_release(&frame_lock);
+  }
   /* 5. 새로 생성한 프레임은 아직 어떤 페이지와도 연결되지 않았다.
    *    따라서 초기값으로 NULL을 설정. */
   frame->page = NULL;
+  frame->pinned = false;
 
   /* 6. 방금 만든 프레임은 페이지와 연결되지 않은 상태여야 한다는 검증 */
   ASSERT(frame->page == NULL);
@@ -213,7 +250,7 @@ static struct frame *vm_get_frame(void) {
 }
 
 /* Growing the stack. */
-static void vm_stack_growth(void *addr UNUSED) {
+void vm_stack_growth(void *addr UNUSED) {
   void *page_addr = pg_round_down(addr);
 
   // 페이지가 있는 경우, 아무 것도 안함
@@ -232,6 +269,22 @@ static void vm_stack_growth(void *addr UNUSED) {
 
 /* Handle the fault on write_protected page */
 static bool vm_handle_wp(struct page *page UNUSED) {
+  if (!page->accessible)
+    return false;
+
+  void *kva = page->frame->kva;
+
+  page->frame->kva = palloc_get_page(PAL_USER | PAL_ZERO);
+
+  if (page->frame->kva == NULL)
+    page->frame = vm_evict_frame();
+
+  memcpy(page->frame->kva, kva, PGSIZE);
+
+  if (!pml4_set_page(thread_current()->pml4, page->va, page->frame->kva, page->accessible))
+    return false;
+
+  return true;
 }
 
 /* Return true on success */
@@ -304,13 +357,16 @@ static bool vm_do_claim_page(struct page *page) {
   /* 1. 사용자 풀에서 새 물리 프레임을 가져온다.
    *    만약 여유 공간이 없다면, swap out 으로 victim 교체가 일어날 수도 있음. */
   struct frame *frame = vm_get_frame();
+  if (frame == NULL) return false;
 
   /* 2. 양방향 연결 설정
    *    - frame이 어떤 page에 속하는지 기록
    *    - page가 어떤 frame을 사용하는지 기록 */
   frame->page = page;
   page->frame = frame;
+  page->owner = thread_current();
 
+  frame->pinned = true;
   /* 3. 페이지 테이블에 (page->va → frame->kva) 매핑 추가
    *    - pml4_set_page: 현재 스레드의 pml4(Page Map Level 4, top-level PT)에
    *      가상주소와 물리주소를 매핑한다.
@@ -322,7 +378,9 @@ static bool vm_do_claim_page(struct page *page) {
    *    - 예: Lazy load의 경우 파일에서 읽어오기
    *    - 익명 페이지(anon)의 경우 swap disk에서 가져오기
    *    - 성공하면 true, 실패하면 false */
-  return swap_in(page, frame->kva);
+  bool ok = swap_in(page, frame->kva);
+  frame->pinned = false;
+  return ok;
 }
 
 /* Initialize new supplemental page table */
@@ -339,24 +397,44 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct su
   hash_first(&i, src_hash);
   while (hash_next(&i)) {
     struct page *src_page = hash_entry(hash_cur(&i), struct page, hash_elem);
-
     enum vm_type type = src_page->operations->type;
+
+    if (type == VM_FILE) {
+      continue;
+    }
+
     if (type == VM_UNINIT) {  // 초기화되지 않은 페이지(VM_UNINIT)인 경우
       struct uninit_page *uninit_page = &src_page->uninit;
       struct file_loader *file_loader = (struct file_loader *)uninit_page->aux;
 
+      if (uninit_page->type == VM_FILE) {
+        continue;
+      }
+
       // 새로운 파일 로더(new_file_loader)를 할당하고 기존의 파일 로더 정보를 복사
       struct file_loader *new_file_loader = malloc(sizeof(struct file_loader));
       memcpy(new_file_loader, uninit_page->aux, sizeof(struct file_loader));
-      new_file_loader->file = file_duplicate(file_loader->file);  // 파일을 복제하여 새로운 파일 포인터를 생성
+
+      // 🔴 중요: file이 NULL이 아닌지 확인하고 reopen
+      if (file_loader->file != NULL) {
+        new_file_loader->file = file_reopen(file_loader->file);
+        if (new_file_loader->file == NULL) {
+          free(new_file_loader);
+          return false;  // file_reopen 실패
+        }
+      } else {
+        new_file_loader->file = NULL;  // NULL 그대로 유지
+      }
 
       // 초기화할 페이지에 신규 파일 로더를 이용하여 초기화할 페이지 할당
       vm_alloc_page_with_initializer(uninit_page->type, src_page->va, src_page->writable, uninit_page->init, new_file_loader);
-      vm_claim_page(src_page->va);                                                  // 페이지를 소유하고 있는 스레드의 페이지 테이블(pml4)에 페이지 등록
-    } else {                                                                        // 초기화된 페이지인 경우
+      vm_claim_page(src_page->va);  // 페이지를 소유하고 있는 스레드의 페이지 테이블(pml4)에 페이지 등록
+    } else {
+      // 초기화된 페이지인 경우
       vm_alloc_page(src_page->operations->type, src_page->va, src_page->writable);  // 페이지 할당
       vm_claim_page(src_page->va);                                                  // 페이지를 소유하고 있는 스레드의 페이지 테이블(pml4)에 페이지 등록
-      memcpy(src_page->va, src_page->frame->kva, PGSIZE);                           // 페이지의 가상 주소에 초기화된 데이터 복사
+      struct page *dst_page = spt_find_page(dst, src_page->va);
+      memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE);  // 페이지의 가상 주소에 초기화된 데이터 복사
     }
   }
 
@@ -406,7 +484,7 @@ bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux U
   return page_a->va < page_b->va;
 }
 
-static bool is_valid_stack_access(void *addr, const uintptr_t rsp) {
+bool is_valid_stack_access(void *addr, const uintptr_t rsp) {
   uintptr_t fault_addr = (uintptr_t)addr;
 
   // stack 영역 확인
@@ -421,8 +499,15 @@ static bool is_valid_stack_access(void *addr, const uintptr_t rsp) {
 
 // frame의 존재는 함수 호출자에서 확인
 void free_frame(struct frame *frame) {
+  if (frame->page) {
+    struct thread *owner = frame->page->owner;
+    uint64_t *pml4 = owner ? owner->pml4 : thread_current()->pml4;
+    pml4_clear_page(pml4, frame->page->va);
+    frame->page->frame = NULL;
+  }
+  lock_acquire(&frame_lock);
   list_remove(&frame->frame_elem);
-  pml4_clear_page(thread_current()->pml4, frame->page->va);
+  lock_release(&frame_lock);
   palloc_free_page(frame->kva);
   free(frame);
 }

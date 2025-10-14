@@ -20,6 +20,7 @@
 #include "threads/vaddr.h"
 #include "userprog/gdt.h"
 #include "userprog/process.h"
+#include "vm/vm.h"
 
 #define FDT_SIZE 512
 typedef int pid_t;
@@ -40,13 +41,14 @@ unsigned tell(int fd);
 void close(int fd);
 bool copy_in(void* dst, const void* usrc, size_t size);
 bool copy_in_string(char* dst, const char* us, size_t dst_sz, size_t* out_len);
-static struct lock filesys_lock;
+struct lock filesys_lock;
 int exec(const char* cmd_line);
 pid_t fork(const char* thread_name, struct intr_frame* if_);
 int wait(pid_t pid);
 int dup2(int oldfd, int newfd);
-void *mmap (void *addr, size_t length, int writable, int fd, off_t offset);
-void munmap (void *addr);
+void* mmap(void* addr, size_t length, int writable, int fd, off_t offset);
+void munmap(void* addr);
+void* check_and_get_page(const void* uaddr);
 
 #define MSR_STAR 0xc0000081         /* Segment selector msr */
 #define MSR_LSTAR 0xc0000082        /* Long mode SYSCALL target */
@@ -54,7 +56,7 @@ void munmap (void *addr);
 
 void syscall_init(void) {
   write_msr(MSR_STAR, ((uint64_t)SEL_UCSEG - 0x10) << 48 | ((uint64_t)SEL_KCSEG)
-                      << 32);
+                                                               << 32);
   write_msr(MSR_LSTAR, (uint64_t)syscall_entry);
   write_msr(MSR_SYSCALL_MASK,
             FLAG_IF | FLAG_TF | FLAG_DF | FLAG_IOPL | FLAG_AC | FLAG_NT);
@@ -63,6 +65,7 @@ void syscall_init(void) {
 
 /* The main system call interface */
 void syscall_handler(struct intr_frame* f UNUSED) {
+  thread_current()->user_rsp = (void*)f->rsp;
   int syscall_number = (int)f->R.rax;
 
   switch (syscall_number) {
@@ -135,7 +138,7 @@ void syscall_handler(struct intr_frame* f UNUSED) {
       break;
     }
     case SYS_MMAP: {
-      void *addr = (void *)f->R.rdi;
+      void* addr = (void*)f->R.rdi;
       off_t length = (off_t)f->R.rsi;
       int writable = (int)f->R.rdx;
       int fd = (int)f->R.r10;
@@ -148,8 +151,8 @@ void syscall_handler(struct intr_frame* f UNUSED) {
       }
 
       // 2. 현재 스레드의 fdt에서 file 가져오기
-      struct thread *curr = thread_current();
-      struct file *file = curr->fdt[fd];
+      struct thread* curr = thread_current();
+      struct file* file = curr->fdt[fd];
 
       // 3. file 유효성 검사
       if (file == NULL || file == STDIN_MARKER || file == STDOUT_MARKER) {
@@ -158,7 +161,7 @@ void syscall_handler(struct intr_frame* f UNUSED) {
       }
 
       // 4. file_reopen으로 독립적인 파일 참조 생성
-      struct file *reopened_file = file_reopen(file);
+      struct file* reopened_file = file_reopen(file);
       if (reopened_file == NULL) {
         f->R.rax = 0;  // MAP_FAILED
         break;
@@ -168,7 +171,7 @@ void syscall_handler(struct intr_frame* f UNUSED) {
       break;
     }
     case SYS_MUNMAP: {
-      do_munmap((void *)f->R.rdi);
+      do_munmap((void*)f->R.rdi);
       break;
     }
     default: {
@@ -205,8 +208,9 @@ bool create(const char* file, unsigned initial_size) {
   if (fname_len == 0) {
     return false;
   }
-
+  lock_acquire(&filesys_lock);
   bool ok = filesys_create(fname, initial_size);
+  lock_release(&filesys_lock);
 
   return ok;
 }
@@ -241,7 +245,9 @@ void seek(int fd, unsigned position) {
 
   if (file == NULL) return;
 
+  lock_acquire(&filesys_lock);
   file_seek(file, position);
+  lock_release(&filesys_lock);
 }
 
 unsigned tell(int fd) {
@@ -308,8 +314,10 @@ int write(int fd, const void* buffer, unsigned size) {
       palloc_free_page(kbuff);
       exit(-1);
     }
-
+    lock_acquire(&filesys_lock);
     int bytes_written = file_write(file, kbuff, chunk_size);
+    lock_release(&filesys_lock);
+
     palloc_free_page(kbuff);
 
     if (bytes_written != chunk_size) {
@@ -339,7 +347,7 @@ int read(int fd, void* buffer, unsigned size) {
       if (!is_user_vaddr((uint8_t*)buffer + i)) {
         exit(-1);
       }
-      if (!pml4_get_page(thread_current()->pml4, (uint8_t*)buffer + i)) {
+      if (check_and_get_page((uint8_t*)buffer + i) == NULL) {
         exit(-1);
       }
     }
@@ -357,13 +365,15 @@ int read(int fd, void* buffer, unsigned size) {
       if (!is_user_vaddr((uint8_t*)buffer + i)) {
         exit(-1);
       }
-      if (!pml4_get_page(thread_current()->pml4, (uint8_t*)buffer + i)) {
+      if (check_and_get_page((uint8_t*)buffer + i) == NULL) {
         exit(-1);
       }
     }
 
     // file_read() 함수 호출
+    lock_acquire(&filesys_lock);
     bytes_read = file_read(file, buffer, size);
+    lock_release(&filesys_lock);
   }
 
   return bytes_read;
@@ -379,7 +389,9 @@ int open(const char* file) {
 
   kname[len] = '\0';
 
+  lock_acquire(&filesys_lock);
   struct file* f = filesys_open(kname);
+  lock_release(&filesys_lock);
 
   if (f == NULL) {
     return -1;
@@ -456,7 +468,7 @@ bool copy_in(void* dst, const void* usrc, size_t size) {
       return false;
     }
 
-    void* kva = pml4_get_page(thread_current()->pml4, user_addr);
+    void* kva = check_and_get_page(user_addr);
     if (kva == NULL) {
       return false;
     }
@@ -479,25 +491,24 @@ bool copy_in(void* dst, const void* usrc, size_t size) {
 bool copy_in_string(char* dst, const char* us, size_t dst_sz, size_t* out_len) {
   /* (1) 파라미터 가드 */
   if (dst == NULL || dst_sz == 0) return false;
-  if (us == NULL || !is_user_vaddr(us)) exit(-1); // bad ptr → 종료
+  if (us == NULL || !is_user_vaddr(us)) exit(-1);  // bad ptr → 종료
 
   struct thread* curr = thread_current();
-  void* pml4 = curr->pml4;
 
   /* (2) 바이트 단위 복사 */
   for (size_t i = 0; i < dst_sz; i++) {
     const char* up = (const char*)us + i;
 
-    if (!is_user_vaddr(up)) exit(-1); // 커널 경계 넘어가면 종료
-    char* kva = pml4_get_page(pml4, up);
-    if (kva == NULL) exit(-1); // 미매핑 → 종료
+    if (!is_user_vaddr(up)) exit(-1);  // 커널 경계 넘어가면 종료
+    char* kva = check_and_get_page(up);
+    if (kva == NULL) exit(-1);  // 미매핑 → 종료
 
-    char c = *kva; // 안전한 한 바이트 로드
-    dst[i] = c;    // 커널 버퍼에 기록
+    char c = *kva;  // 안전한 한 바이트 로드
+    dst[i] = c;     // 커널 버퍼에 기록
 
     if (c == '\0') {
       // 문자열 끝
-      if (out_len) *out_len = i; // 널 전까지 길이
+      if (out_len) *out_len = i;  // 널 전까지 길이
       return true;
     }
   }
@@ -515,7 +526,7 @@ pid_t fork(const char* thread_name, struct intr_frame* if_) {
 
   // 2. 전체 문자열 유효성 검사
   int len = 0;
-  int MAX_LEN = 16; // 최대 길이 제한(16자)
+  int MAX_LEN = 16;  // 최대 길이 제한(16자)
   while (len < MAX_LEN) {
     if (!is_user_vaddr(thread_name + len) ||
         !pml4_get_page(thread_current()->pml4, thread_name + len)) {
@@ -537,7 +548,6 @@ int dup2(int oldfd, int newfd) {
   if (oldfd < 0 || oldfd >= FDT_SIZE) return -1;
   if (newfd < 0 || newfd >= FDT_SIZE) return -1;
 
-
   if (oldfd == newfd) return newfd;
   struct thread* curr = thread_current();
 
@@ -553,4 +563,44 @@ int dup2(int oldfd, int newfd) {
   }
 
   return newfd;
+}
+
+void* check_and_get_page(const void* uaddr) {
+  // 1. User 주소 범위 확인
+  if (!is_user_vaddr(uaddr)) {
+    return NULL;
+  }
+
+  struct thread* curr = thread_current();
+
+  // 2. 페이지 매핑 확인
+  void* kva = pml4_get_page(curr->pml4, uaddr);
+
+  // 3. 매핑되어 있으면 바로 반환
+  if (kva != NULL) {
+    return kva;
+  }
+
+  // SPT에서 페이지 찾기
+  void* page_addr = pg_round_down(uaddr);
+  struct page* page = spt_find_page(&curr->spt, page_addr);
+
+  if (page != NULL) {
+    // SPT에 있음 -> Lazy loading 필요
+    if (vm_claim_page(page_addr)) {
+      kva = pml4_get_page(curr->pml4, uaddr);
+      return kva;
+    }
+    // Claim 실패
+    return NULL;
+  }
+
+  // SPT에서 못찾으면 stack growth 시도
+  if (is_valid_stack_access(page_addr, (uintptr_t)curr->user_rsp)) {
+    vm_stack_growth(page_addr);
+    kva = pml4_get_page(curr->pml4, uaddr);
+    return kva;
+  }
+
+  return NULL;  // 모두 실패
 }
