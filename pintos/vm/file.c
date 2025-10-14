@@ -7,6 +7,7 @@
 #include "threads/thread.h"    // thread_current(), pml4
 #include "threads/vaddr.h"     // PGSIZE
 #include "userprog/process.h"  // struct vm_load_arg
+#include "userprog/syscall.h"
 #include "vm/vm.h"
 
 static bool file_backed_swap_in(struct page *page, void *kva);
@@ -44,8 +45,9 @@ bool file_backed_initializer(struct page *page, enum vm_type type, void *kva) {
 static bool
 file_backed_swap_in(struct page *page, void *kva) {
   struct file_page *file_page UNUSED = &page->file;
-
+  lock_acquire(&filesys_lock);
   int read = file_read_at(file_page->file, page->frame->kva, file_page->page_read_bytes, file_page->offset);
+  lock_release(&filesys_lock);
   memset(page->frame->kva + read, 0, PGSIZE - read);
   return true;
 }
@@ -54,16 +56,20 @@ file_backed_swap_in(struct page *page, void *kva) {
 static bool
 file_backed_swap_out(struct page *page) {
   struct file_page *file_page UNUSED = &page->file;
+  struct thread *owner = page->owner;
+  uint64_t *pml4 = owner ? owner->pml4 : thread_current()->pml4;
 
   struct frame *frame = page->frame;
 
-  if (pml4_is_dirty(thread_current()->pml4, page->va)) {
+  if (pml4_is_dirty(pml4, page->va)) {
+    lock_acquire(&filesys_lock);
     file_write_at(file_page->file, page->frame->kva, file_page->page_read_bytes, file_page->offset);
-    pml4_set_dirty(thread_current()->pml4, page->va, false);
+    lock_release(&filesys_lock);
+    pml4_set_dirty(pml4, page->va, false);
   }
   page->frame->page = NULL;
   page->frame = NULL;
-  pml4_clear_page(thread_current()->pml4, page->va);
+  pml4_clear_page(pml4, page->va);
   return true;
 }
 
@@ -71,19 +77,24 @@ file_backed_swap_out(struct page *page) {
 static void
 file_backed_destroy(struct page *page) {
   struct file_page *file_page UNUSED = &page->file;
+  struct thread *owner = page->owner;
+  uint64_t *pml4 = owner ? owner->pml4 : thread_current()->pml4;
 
-  if (pml4_is_dirty(thread_current()->pml4, page->va)) {
+  if (pml4_is_dirty(pml4, page->va) && page->frame) {
+    lock_acquire(&filesys_lock);
     file_write_at(file_page->file, page->va, file_page->page_read_bytes, file_page->offset);
-    pml4_set_dirty(thread_current()->pml4, page->va, false);
+    lock_release(&filesys_lock);
+    pml4_set_dirty(pml4, page->va, false);
   }
 
   if (page->frame) {
     list_remove(&page->frame->frame_elem);
     page->frame->page = NULL;
+    palloc_free_page(page->frame->kva);
+    free(page->frame);
     page->frame = NULL;
   }
-
-  pml4_clear_page(thread_current()->pml4, page->va);
+  pml4_clear_page(pml4, page->va);
 }
 
 /* Do the mmap */
@@ -92,8 +103,10 @@ static bool lazy_load_mmap(struct page *page, void *aux) {
   struct file_page *file_info = (struct file_page *)aux;
 
   // 파일에서 데이터 읽기
+  lock_acquire(&filesys_lock);
   off_t bytes_read = file_read_at(file_info->file, page->frame->kva,
                                   file_info->page_read_bytes, file_info->offset);
+  lock_release(&filesys_lock);
 
   if (bytes_read < 0) {
     return false;
@@ -140,7 +153,7 @@ void *do_mmap(void *addr, off_t length, int writable,
   if (file == NULL || length <= 0 || length > (off_t)0x10000000 ||  // 256MB 제한
       addr == NULL || offset % PGSIZE != 0) {
     return NULL;
-      }
+  }
 
   /* 파일 검증 */
   if (file_length(file) == 0) {
@@ -215,11 +228,7 @@ rollback:
   for (size_t j = 0; j < page_count; j++) {
     void *page_addr = addr + (j * PGSIZE);
     struct page *page = spt_find_page(&curr->spt, page_addr);
-    if (page != NULL) {
-      spt_remove_page(&curr->spt, page);
-      free(page->uninit.aux);
-      free(page);
-    }
+    if (page != NULL) spt_remove_page(&curr->spt, page);
   }
   list_remove(&region->elem);
   free(region);

@@ -19,6 +19,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "userprog/gdt.h"
+#include "userprog/syscall.h"
 #include "userprog/tss.h"
 #ifdef VM
 #include "vm/vm.h"
@@ -478,8 +479,8 @@ void process_exit(void) {
 #ifdef VM
   // 모든 mmap 영역 해제
   while (!list_empty(&curr->mmap_list)) {
-    struct list_elem *e = list_begin(&curr->mmap_list);
-    struct mmap_region *region = list_entry(e, struct mmap_region, elem);
+    struct list_elem* e = list_begin(&curr->mmap_list);
+    struct mmap_region* region = list_entry(e, struct mmap_region, elem);
     do_munmap(region->start_addr);
   }
 #endif
@@ -610,14 +611,20 @@ static bool load(const char* file_name, struct intr_frame* if_) {
   process_activate(thread_current());
 
   /* Open executable file. */
+  lock_acquire(&filesys_lock);
   file = filesys_open(file_name);
+  lock_release(&filesys_lock);
+
   if (file == NULL) {
     printf("load: %s: open failed\n", file_name);
     goto done;
   }
 
   /* 실행 중인 파일 쓰기 금지 & 스레드에 정보 저장 */
+  lock_acquire(&filesys_lock);
   file_deny_write(file);
+  lock_release(&filesys_lock);
+
   t->running_file = file;
 
   /* Read and verify executable header. */
@@ -634,11 +641,16 @@ static bool load(const char* file_name, struct intr_frame* if_) {
   file_ofs = ehdr.e_phoff;
   for (i = 0; i < ehdr.e_phnum; i++) {
     struct Phdr phdr;
-
-    if (file_ofs < 0 || file_ofs > file_length(file)) goto done;
+    lock_acquire(&filesys_lock);
+    if (file_ofs < 0 || file_ofs > file_length(file)) {
+      lock_release(&filesys_lock);
+      goto done;
+    }
     file_seek(file, file_ofs);
 
     if (file_read(file, &phdr, sizeof phdr) != sizeof phdr) goto done;
+    lock_release(&filesys_lock);
+
     file_ofs += sizeof phdr;
     switch (phdr.p_type) {
       case PT_NULL:
@@ -849,8 +861,10 @@ static bool lazy_load_segment(struct page* page, void* aux) {
   uint8_t* upage = page->va;
   uint32_t page_read_bytes = file_loader->page_read_bytes;
   uint32_t page_zero_bytes = file_loader->page_zero_bytes;
-
-  if (file_read_at(file, page->frame->kva, page_read_bytes, ofs) != (int)page_read_bytes) {
+  lock_acquire(&filesys_lock);
+  bool ok = (file_read_at(file, page->frame->kva, page_read_bytes, ofs) == (int)page_read_bytes);
+  lock_release(&filesys_lock);
+  if (!ok) {
     free_frame(page->frame);
     free(file_loader);
     return false;
