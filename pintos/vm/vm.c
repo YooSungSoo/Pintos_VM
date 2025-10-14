@@ -229,15 +229,18 @@ static struct frame *vm_get_frame(void) {
     free(frame);  // 누수 방지를 위해 free
     frame = vm_evict_frame();
     if (frame == NULL) return NULL;
-  } else
+  } else {
     /* 4. 정상적으로 프레임을 확보했다면
      *    frame_table (글로벌 프레임 리스트)에 추가한다.
      *    - 이 리스트는 교체 알고리즘에서 victim 선택할 때 사용됨 */
+    lock_acquire(&frame_lock);
     list_push_back(&frame_table, &frame->frame_elem);
-
+    lock_release(&frame_lock);
+  }
   /* 5. 새로 생성한 프레임은 아직 어떤 페이지와도 연결되지 않았다.
    *    따라서 초기값으로 NULL을 설정. */
   frame->page = NULL;
+  frame->pinned = false;
 
   /* 6. 방금 만든 프레임은 페이지와 연결되지 않은 상태여야 한다는 검증 */
   ASSERT(frame->page == NULL);
@@ -430,7 +433,8 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct su
       // 초기화된 페이지인 경우
       vm_alloc_page(src_page->operations->type, src_page->va, src_page->writable);  // 페이지 할당
       vm_claim_page(src_page->va);                                                  // 페이지를 소유하고 있는 스레드의 페이지 테이블(pml4)에 페이지 등록
-      memcpy(src_page->va, src_page->frame->kva, PGSIZE);                           // 페이지의 가상 주소에 초기화된 데이터 복사
+      struct page *dst_page = spt_find_page(dst, src_page->va);
+      memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE);  // 페이지의 가상 주소에 초기화된 데이터 복사
     }
   }
 
@@ -501,7 +505,9 @@ void free_frame(struct frame *frame) {
     pml4_clear_page(pml4, frame->page->va);
     frame->page->frame = NULL;
   }
+  lock_acquire(&frame_lock);
   list_remove(&frame->frame_elem);
+  lock_release(&frame_lock);
   palloc_free_page(frame->kva);
   free(frame);
 }
