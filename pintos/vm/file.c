@@ -260,8 +260,6 @@ void do_munmap(void *addr) {
     struct page *page = spt_find_page(&curr->spt, page_addr);
 
     if (page != NULL) {
-      // destroy 호출 (file_backed_destroy가 dirty 체크 & write back 수행)
-      destroy(page);
       // SPT에서 제거
       spt_remove_page(&curr->spt, page);
     }
