@@ -78,7 +78,7 @@ static void
 file_backed_destroy(struct page *page) {
   struct file_page *file_page UNUSED = &page->file;
   struct thread *owner = page->owner;
-  uint64_t pml4 = owner ? owner->pml4 : thread_current()->pml4;
+  uint64_t *pml4 = owner ? owner->pml4 : thread_current()->pml4;
 
   if (pml4_is_dirty(pml4, page->va) && page->frame) {
     lock_acquire(&filesys_lock);
