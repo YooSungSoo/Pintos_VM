@@ -379,7 +379,7 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct su
       // 새로운 파일 로더(new_file_loader)를 할당하고 기존의 파일 로더 정보를 복사
       struct file_loader *new_file_loader = malloc(sizeof(struct file_loader));
       memcpy(new_file_loader, uninit_page->aux, sizeof(struct file_loader));
-      new_file_loader->file = file_duplicate(file_loader->file);  // 파일을 복제하여 새로운 파일 포인터를 생성
+      new_file_loader->file = file_reopen(file_loader->file);  // 파일을 복제하여 새로운 파일 포인터를 생성
 
       // 초기화할 페이지에 신규 파일 로더를 이용하여 초기화할 페이지 할당
       vm_alloc_page_with_initializer(uninit_page->type, src_page->va, src_page->writable, uninit_page->init, new_file_loader);
