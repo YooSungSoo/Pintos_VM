@@ -92,13 +92,18 @@ ANON 페이지를 스왑 아웃한다.
 static bool anon_swap_out(struct page *page) {
   struct anon_page *anon_page = &page->anon;
   struct swap_anon *swap_anon = find_blank_swap();
+  if (swap_anon == NULL) return false;
+
   for (int i = 0; i < SECTOR_PER_PAGE; i++) {
     disk_write(swap_disk, swap_anon->sector[i], (uint8_t *)page->frame->kva + DISK_SECTOR_SIZE * i);
   }
 
   swap_anon->use = true;
   anon_page->swap_anon = swap_anon;
-  pml4_clear_page(thread_current()->pml4, page->va);
+  struct thread *owner = page->owner;
+  uint64_t *pml4 = owner ? owner->pml4 : thread_current()->pml4;
+  pml4_clear_page(pml4, page->va);
+  page->frame->page = NULL;
   page->frame = NULL;
 
   return true;

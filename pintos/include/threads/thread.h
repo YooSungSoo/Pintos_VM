@@ -142,17 +142,17 @@ struct thread {
 // 👆👆👆 TCB(Thread Control Block)
 
 struct mmap_region {
-  void *start_addr;        // 매핑 시작 주소
-  size_t page_count;       // 매핑된 페이지 개수
-  struct file *file;       // 매핑된 파일 (munmap 시 file_close용)
-  struct list_elem elem;   // mmap_list의 원소
+  void *start_addr;       // 매핑 시작 주소
+  size_t page_count;      // 매핑된 페이지 개수
+  struct file *file;      // 매핑된 파일 (munmap 시 file_close용)
+  struct list_elem elem;  // mmap_list의 원소
 };
 
 extern struct list sleep_list;  // sleep 상태인 스레드들을 담는 리스트
 
 #define FDT_SIZE 512  // 파일 디스크립터 테이블 최대 크기
-#define STDIN_MARKER  ((struct file*)1)
-#define STDOUT_MARKER ((struct file*)2)
+#define STDIN_MARKER ((struct file *)1)
+#define STDOUT_MARKER ((struct file *)2)
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.

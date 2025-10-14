@@ -156,32 +156,49 @@ void spt_remove_page(struct supplemental_page_table *spt, struct page *page) {
 
 /* Get the struct frame, that will be evicted. */
 static struct frame *vm_get_victim(void) {
-  struct frame *victim = NULL;
-
   lock_acquire(&frame_lock);
-  for (next = list_begin(&frame_table); next != list_end(&frame_table); next = list_next(next)) {
-    victim = list_entry(next, struct frame, frame_elem);
-    if (pml4_is_accessed(thread_current()->pml4, victim->page->va))
-      pml4_set_accessed(thread_current()->pml4, victim->page->va, false);
-    else {
-      lock_release(&frame_lock);
-      return victim;
+  if (list_empty(&frame_table)) {
+    lock_release(&frame_lock);
+    return NULL;
+  }
+
+  if (next == NULL || next == list_end(&frame_table)) next = list_begin(&frame_table);
+
+  size_t scanned = 0, total = list_size(&frame_table) * 2;
+  while (scanned++ < total) {
+    struct frame *f = list_entry(next, struct frame, frame_elem);
+
+    next = list_next(next);
+    if (next == list_end(&frame_table)) next = list_begin(&frame_table);
+
+    if (f == NULL || f->page == NULL || f->pinned) continue;
+
+    struct page *p = f->page;
+    struct thread *owner = p->owner;
+    uint64_t *pml4 = owner ? owner->pml4 : thread_current()->pml4;
+    if (pml4_is_accessed(pml4, p->va)) {
+      pml4_set_accessed(pml4, p->va, false);  // 2차 기회 부여
+      continue;
     }
+    // accessed == 0 victim
+    lock_release(&frame_lock);
+    return f;
   }
   lock_release(&frame_lock);
-
-  return victim;
+  return NULL;
 }
 
 /* Evict one page and return the corresponding frame.
  * Return NULL on error.*/
 static struct frame *vm_evict_frame(void) {
   struct frame *victim = vm_get_victim();
-  if (victim->page)
-    swap_out(victim->page);
-  return victim;
+  if (victim == NULL) return NULL;
 
-  return NULL;
+  if (victim->page) {
+    if (!swap_out(victim->page)) return NULL;
+  }
+  // victim 프레임은 frame_table에 그대로 남겨 재사용
+  return victim;
 }
 
 /*
@@ -209,9 +226,11 @@ static struct frame *vm_get_frame(void) {
   /* 3. 물리 페이지를 얻지 못했을 경우 → 프레임이 가득 찼다는 뜻
    *    - 이때는 교체 정책(eviction policy)을 통해
    *      victim frame을 골라 swap out 한 뒤 프레임을 회수해야 한다. */
-  if (frame->kva == NULL)
+  if (frame->kva == NULL) {
+    free(frame);  // 누수 방지를 위해 free
     frame = vm_evict_frame();
-  else
+    if (frame == NULL) return NULL;
+  } else
     /* 4. 정상적으로 프레임을 확보했다면
      *    frame_table (글로벌 프레임 리스트)에 추가한다.
      *    - 이 리스트는 교체 알고리즘에서 victim 선택할 때 사용됨 */
@@ -336,13 +355,16 @@ static bool vm_do_claim_page(struct page *page) {
   /* 1. 사용자 풀에서 새 물리 프레임을 가져온다.
    *    만약 여유 공간이 없다면, swap out 으로 victim 교체가 일어날 수도 있음. */
   struct frame *frame = vm_get_frame();
+  if (frame == NULL) return false;
 
   /* 2. 양방향 연결 설정
    *    - frame이 어떤 page에 속하는지 기록
    *    - page가 어떤 frame을 사용하는지 기록 */
   frame->page = page;
   page->frame = frame;
+  page->owner = thread_current();
 
+  frame->pinned = true;
   /* 3. 페이지 테이블에 (page->va → frame->kva) 매핑 추가
    *    - pml4_set_page: 현재 스레드의 pml4(Page Map Level 4, top-level PT)에
    *      가상주소와 물리주소를 매핑한다.
@@ -354,7 +376,9 @@ static bool vm_do_claim_page(struct page *page) {
    *    - 예: Lazy load의 경우 파일에서 읽어오기
    *    - 익명 페이지(anon)의 경우 swap disk에서 가져오기
    *    - 성공하면 true, 실패하면 false */
-  return swap_in(page, frame->kva);
+  bool ok = swap_in(page, frame->kva);
+  frame->pinned = false;
+  return ok;
 }
 
 /* Initialize new supplemental page table */
@@ -384,8 +408,9 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct su
 
       // 초기화할 페이지에 신규 파일 로더를 이용하여 초기화할 페이지 할당
       vm_alloc_page_with_initializer(uninit_page->type, src_page->va, src_page->writable, uninit_page->init, new_file_loader);
-      vm_claim_page(src_page->va);                                                  // 페이지를 소유하고 있는 스레드의 페이지 테이블(pml4)에 페이지 등록
-    } else {                                                                        // 초기화된 페이지인 경우
+      vm_claim_page(src_page->va);  // 페이지를 소유하고 있는 스레드의 페이지 테이블(pml4)에 페이지 등록
+    } else {
+      // 초기화된 페이지인 경우
       vm_alloc_page(src_page->operations->type, src_page->va, src_page->writable);  // 페이지 할당
       vm_claim_page(src_page->va);                                                  // 페이지를 소유하고 있는 스레드의 페이지 테이블(pml4)에 페이지 등록
       memcpy(src_page->va, src_page->frame->kva, PGSIZE);                           // 페이지의 가상 주소에 초기화된 데이터 복사
@@ -453,8 +478,13 @@ static bool is_valid_stack_access(void *addr, const uintptr_t rsp) {
 
 // frame의 존재는 함수 호출자에서 확인
 void free_frame(struct frame *frame) {
+  if (frame->page) {
+    struct thread *owner = frame->page->owner;
+    uint64_t *pml4 = owner ? owner->pml4 : thread_current()->pml4;
+    pml4_clear_page(pml4, frame->page->va);
+    frame->page->frame = NULL;
+  }
   list_remove(&frame->frame_elem);
-  pml4_clear_page(thread_current()->pml4, frame->page->va);
   palloc_free_page(frame->kva);
   free(frame);
 }
