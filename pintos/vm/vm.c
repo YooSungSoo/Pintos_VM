@@ -9,7 +9,6 @@
 static struct list frame_table;  // 구조체 추가
 struct lock frame_lock;
 struct list_elem *next = NULL;
-static bool is_valid_stack_access(void *addr, const uintptr_t rsp);
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -229,7 +228,7 @@ static struct frame *vm_get_frame(void) {
 }
 
 /* Growing the stack. */
-static void vm_stack_growth(void *addr UNUSED) {
+void vm_stack_growth(void *addr UNUSED) {
   void *page_addr = pg_round_down(addr);
 
   // 페이지가 있는 경우, 아무 것도 안함
@@ -438,7 +437,7 @@ bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux U
   return page_a->va < page_b->va;
 }
 
-static bool is_valid_stack_access(void *addr, const uintptr_t rsp) {
+bool is_valid_stack_access(void *addr, const uintptr_t rsp) {
   uintptr_t fault_addr = (uintptr_t)addr;
 
   // stack 영역 확인
