@@ -136,35 +136,29 @@ void *do_mmap(void *addr, off_t length, int writable,
               struct file *file, off_t offset) {
   struct thread *curr = thread_current();
 
-  if (length == 0 || file == NULL) {
+  /* 기본 매개변수 검증 */
+  if (file == NULL || length <= 0 || length > (off_t)0x10000000 ||  // 256MB 제한
+      addr == NULL || offset % PGSIZE != 0) {
+    return NULL;
+      }
+
+  /* 파일 검증 */
+  if (file_length(file) == 0) {
+    return NULL;
+  }
+
+  /* 주소 정렬 및 유효성 검증 */
+  if (pg_ofs(addr) != 0 || !is_user_vaddr(addr)) {
+    return NULL;
+  }
+
+  /* 매핑 범위 검증 (오버플로우 및 커널 영역 침범 체크) */
+  if ((uintptr_t)addr + length < (uintptr_t)addr ||  // 오버플로우
+      !is_user_vaddr(addr + length - 1)) {           // 끝 주소가 커널 영역
     return NULL;
   }
 
   off_t file_len = file_length(file);
-  if (file_len == 0) {
-    return NULL;
-  }
-
-  if (offset % PGSIZE != 0) {
-    return NULL;
-  }
-
-  if (addr == NULL) {
-    return NULL;
-  }
-
-  if (pg_ofs(addr) != 0) {
-    return NULL;  // page-aligned가 아님
-  }
-
-  if (!is_user_vaddr(addr)) {
-    return NULL;
-  }
-
-  // 주소 범위 체크
-  if (!is_user_vaddr(addr + length - 1)) {
-    return NULL;
-  }
   // 5. 매핑할 페이지 수 계산
   size_t page_count = (length + PGSIZE - 1) / PGSIZE;
 
