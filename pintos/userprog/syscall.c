@@ -370,6 +370,30 @@ int read(int fd, void* buffer, unsigned size) {
       }
     }
 
+    // 버퍼가 writable인지 확인 (페이지 단위로)
+    for (unsigned i = 0; i < size; i += PGSIZE) {
+      void* page_addr = pg_round_down((uint8_t*)buffer + i);
+      uint64_t* pte = pml4e_walk(curr->pml4, (uint64_t)page_addr, 0);
+
+      // PTE가 없거나 writable이 아니면 종료!
+      if (pte == NULL || !(*pte & PTE_W)) {
+        exit(-1);
+      }
+    }
+
+    // 마지막 바이트가 속한 페이지도 확인
+    if (size > 0) {
+      void* last_page = pg_round_down((uint8_t*)buffer + size - 1);
+      void* first_page = pg_round_down(buffer);
+
+      if (last_page != first_page) {
+        uint64_t* pte = pml4e_walk(curr->pml4, (uint64_t)last_page, 0);
+        if (pte == NULL || !(*pte & PTE_W)) {
+          exit(-1);
+        }
+      }
+    }
+
     // file_read() 함수 호출
     lock_acquire(&filesys_lock);
     bytes_read = file_read(file, buffer, size);
