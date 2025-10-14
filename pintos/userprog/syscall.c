@@ -20,6 +20,7 @@
 #include "threads/vaddr.h"
 #include "userprog/gdt.h"
 #include "userprog/process.h"
+#include "vm/vm.h"
 
 #define FDT_SIZE 512
 typedef int pid_t;
@@ -47,6 +48,7 @@ int wait(pid_t pid);
 int dup2(int oldfd, int newfd);
 void *mmap (void *addr, size_t length, int writable, int fd, off_t offset);
 void munmap (void *addr);
+void *check_and_get_page(const void *uaddr);
 
 #define MSR_STAR 0xc0000081         /* Segment selector msr */
 #define MSR_LSTAR 0xc0000082        /* Long mode SYSCALL target */
@@ -63,6 +65,7 @@ void syscall_init(void) {
 
 /* The main system call interface */
 void syscall_handler(struct intr_frame* f UNUSED) {
+  thread_current()->user_rsp = (void *)f->rsp;
   int syscall_number = (int)f->R.rax;
 
   switch (syscall_number) {
@@ -339,7 +342,7 @@ int read(int fd, void* buffer, unsigned size) {
       if (!is_user_vaddr((uint8_t*)buffer + i)) {
         exit(-1);
       }
-      if (!pml4_get_page(thread_current()->pml4, (uint8_t*)buffer + i)) {
+      if (check_and_get_page((uint8_t*)buffer + i) == NULL) {
         exit(-1);
       }
     }
@@ -357,7 +360,7 @@ int read(int fd, void* buffer, unsigned size) {
       if (!is_user_vaddr((uint8_t*)buffer + i)) {
         exit(-1);
       }
-      if (!pml4_get_page(thread_current()->pml4, (uint8_t*)buffer + i)) {
+      if (check_and_get_page((uint8_t*)buffer + i) == NULL) {
         exit(-1);
       }
     }
@@ -456,7 +459,7 @@ bool copy_in(void* dst, const void* usrc, size_t size) {
       return false;
     }
 
-    void* kva = pml4_get_page(thread_current()->pml4, user_addr);
+    void* kva = check_and_get_page(user_addr);
     if (kva == NULL) {
       return false;
     }
@@ -482,14 +485,13 @@ bool copy_in_string(char* dst, const char* us, size_t dst_sz, size_t* out_len) {
   if (us == NULL || !is_user_vaddr(us)) exit(-1); // bad ptr → 종료
 
   struct thread* curr = thread_current();
-  void* pml4 = curr->pml4;
 
   /* (2) 바이트 단위 복사 */
   for (size_t i = 0; i < dst_sz; i++) {
     const char* up = (const char*)us + i;
 
     if (!is_user_vaddr(up)) exit(-1); // 커널 경계 넘어가면 종료
-    char* kva = pml4_get_page(pml4, up);
+    char* kva = check_and_get_page(up);
     if (kva == NULL) exit(-1); // 미매핑 → 종료
 
     char c = *kva; // 안전한 한 바이트 로드
@@ -553,4 +555,44 @@ int dup2(int oldfd, int newfd) {
   }
 
   return newfd;
+}
+
+void *check_and_get_page(const void *uaddr) {
+  // 1. User 주소 범위 확인
+  if (!is_user_vaddr(uaddr)) {
+    return NULL;
+  }
+
+  struct thread* curr = thread_current();
+
+  // 2. 페이지 매핑 확인
+  void* kva = pml4_get_page(curr->pml4, uaddr);
+
+  // 3. 매핑되어 있으면 바로 반환
+  if (kva != NULL) {
+    return kva;
+  }
+
+  // SPT에서 페이지 찾기
+  void* page_addr = pg_round_down(uaddr);
+  struct page* page = spt_find_page(&curr->spt, page_addr);
+
+  if (page != NULL) {
+    // SPT에 있음 -> Lazy loading 필요
+    if (vm_claim_page(page_addr)) {
+      kva = pml4_get_page(curr->pml4, uaddr);
+      return kva;
+    }
+    // Claim 실패
+    return NULL;
+  }
+
+  // SPT에서 못찾으면 stack growth 시도
+  if (is_valid_stack_access(page_addr, (uintptr_t)curr->user_rsp)) {
+    vm_stack_growth(page_addr);
+    kva = pml4_get_page(curr->pml4, uaddr);
+    return kva;
+  }
+
+  return NULL; // 모두 실패
 }

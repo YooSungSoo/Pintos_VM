@@ -239,6 +239,16 @@ static void __do_fork(void* aux) {
     }
 
     struct file* new_file = NULL;
+
+    bool is_running_file_inode = false;
+    if (parent->running_file != NULL) {
+      struct inode* parent_running_inode = file_get_inode(parent->running_file);
+      struct inode* current_file_inode = file_get_inode(parent_file);
+      if (parent_running_inode == current_file_inode) {
+        is_running_file_inode = true;
+      }
+    }
+
     for (int prev_fd = 0; prev_fd < fd; prev_fd++) {
       // parent에서 같은 파일을 가리키고 있었는지 확인
       if (parent->fdt[prev_fd] == parent_file) {
@@ -254,11 +264,19 @@ static void __do_fork(void* aux) {
     }
 
     if (new_file == NULL) {
-      new_file = file_duplicate(parent_file);
+      if (is_running_file_inode) {
+        new_file = file_reopen(parent_file);
+      } else {
+        new_file = file_duplicate(parent_file);
+      }
     }
     if (new_file == NULL) goto error;
 
     current->fdt[fd] = new_file;
+  }
+
+  if (parent->running_file != NULL) {
+    current->running_file = file_reopen(parent->running_file);
   }
 
   /* 마지막으로, 새롭게 생성된 프로세스로 전환합니다. */

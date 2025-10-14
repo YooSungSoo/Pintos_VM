@@ -108,6 +108,7 @@ struct thread {
 
   /* Shared between thread.c and synch.c. */
   struct list_elem elem; /* List element. */
+  void *user_rsp; // syscall 시작 시점의 rsp
 
 #ifdef USERPROG
   /* Owned by userprog/process.c. */

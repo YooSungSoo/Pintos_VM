@@ -9,7 +9,6 @@
 static struct list frame_table;  // 구조체 추가
 struct lock frame_lock;
 struct list_elem *next = NULL;
-static bool is_valid_stack_access(void *addr, const uintptr_t rsp);
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -248,7 +247,7 @@ static struct frame *vm_get_frame(void) {
 }
 
 /* Growing the stack. */
-static void vm_stack_growth(void *addr UNUSED) {
+void vm_stack_growth(void *addr UNUSED) {
   void *page_addr = pg_round_down(addr);
 
   // 페이지가 있는 경우, 아무 것도 안함
@@ -395,16 +394,34 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct su
   hash_first(&i, src_hash);
   while (hash_next(&i)) {
     struct page *src_page = hash_entry(hash_cur(&i), struct page, hash_elem);
-
     enum vm_type type = src_page->operations->type;
+
+    if (type == VM_FILE) {
+      continue;
+    }
+
     if (type == VM_UNINIT) {  // 초기화되지 않은 페이지(VM_UNINIT)인 경우
       struct uninit_page *uninit_page = &src_page->uninit;
       struct file_loader *file_loader = (struct file_loader *)uninit_page->aux;
 
+      if (uninit_page->type == VM_FILE) {
+        continue;
+      }
+
       // 새로운 파일 로더(new_file_loader)를 할당하고 기존의 파일 로더 정보를 복사
       struct file_loader *new_file_loader = malloc(sizeof(struct file_loader));
       memcpy(new_file_loader, uninit_page->aux, sizeof(struct file_loader));
-      new_file_loader->file = file_duplicate(file_loader->file);  // 파일을 복제하여 새로운 파일 포인터를 생성
+
+      // 🔴 중요: file이 NULL이 아닌지 확인하고 reopen
+      if (file_loader->file != NULL) {
+        new_file_loader->file = file_reopen(file_loader->file);
+        if (new_file_loader->file == NULL) {
+          free(new_file_loader);
+          return false;  // file_reopen 실패
+        }
+      } else {
+        new_file_loader->file = NULL;  // NULL 그대로 유지
+      }
 
       // 초기화할 페이지에 신규 파일 로더를 이용하여 초기화할 페이지 할당
       vm_alloc_page_with_initializer(uninit_page->type, src_page->va, src_page->writable, uninit_page->init, new_file_loader);
@@ -463,7 +480,7 @@ bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux U
   return page_a->va < page_b->va;
 }
 
-static bool is_valid_stack_access(void *addr, const uintptr_t rsp) {
+bool is_valid_stack_access(void *addr, const uintptr_t rsp) {
   uintptr_t fault_addr = (uintptr_t)addr;
 
   // stack 영역 확인
