@@ -240,7 +240,6 @@ static void __do_fork(void* aux) {
 
     struct file* new_file = NULL;
 
-    // 🔴 추가된 부분: running_file과 같은 inode인지 확인
     bool is_running_file_inode = false;
     if (parent->running_file != NULL) {
       struct inode* parent_running_inode = file_get_inode(parent->running_file);
